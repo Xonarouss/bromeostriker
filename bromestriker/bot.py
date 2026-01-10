@@ -1,0 +1,420 @@
+import os
+import json
+import time
+import asyncio
+import datetime as _dt
+from typing import Optional, List, Set
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+from dotenv import load_dotenv
+
+from .db import DB
+
+STRIKE1_DURATION = 24 * 60 * 60
+STRIKE2_DURATION = 7 * 24 * 60 * 60
+
+def _parse_csv_ids(val: str) -> Set[int]:
+    out: Set[int] = set()
+    for part in (val or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.add(int(part))
+        except ValueError:
+            pass
+    return out
+
+def _parse_csv_names(val: str) -> Set[str]:
+    return set([p.strip() for p in (val or "").split(",") if p.strip()])
+
+def _human_duration(seconds: int) -> str:
+    if seconds >= 7*24*60*60:
+        days = seconds // (24*60*60)
+        return f"{days} dagen"
+    hours = max(1, seconds // 3600)
+    return f"{hours} uur"
+
+class BromeStriker(commands.Bot):
+    def __init__(self, *, guild_id: int, db_path: str, modlog_channel_id: Optional[int] = None):
+        intents = discord.Intents.default()
+        intents.members = True  # needed for role ops
+        super().__init__(command_prefix="!", intents=intents)
+
+        self.guild_id = guild_id
+        self.modlog_channel_id = modlog_channel_id
+
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self.db = DB(db_path)
+
+        # config
+        self.preserve_role_ids = _parse_csv_ids(os.getenv("PRESERVE_ROLE_IDS", ""))
+        self.preserve_role_names = _parse_csv_names(os.getenv("PRESERVE_ROLE_NAMES", "Member"))
+        self.hidden_category_ids = _parse_csv_ids(os.getenv("MUTED_HIDDEN_CATEGORY_IDS", ""))
+
+        self.twitch_webhook = (os.getenv("TWITCH_BAN_WEBHOOK_URL", "") or "").strip()
+
+        # role names
+        self.role_strike_1 = "Strike 1"
+        self.role_strike_2 = "Strike 2"
+        self.role_strike_3 = "Strike 3"
+        self.role_muted = "Gedempt"
+
+    async def setup_hook(self) -> None:
+        guild = discord.Object(id=self.guild_id)
+        # Register global commands to this guild for instant availability
+        self.tree.copy_global_to(guild=guild)
+        await self.tree.sync(guild=guild)
+        self.mute_watcher_task = asyncio.create_task(self._mute_watcher_loop())
+
+    async def on_ready(self) -> None:
+        print(f"Logged in as {self.user} (guild={self.guild_id})")
+
+    async def _ensure_roles(self, guild: discord.Guild) -> None:
+        # Ensure roles exist; don't change permissions except for muted role default denies send messages.
+        def find_role(name: str) -> Optional[discord.Role]:
+            return discord.utils.get(guild.roles, name=name)
+
+        # Strike roles
+        for rn in (self.role_strike_1, self.role_strike_2, self.role_strike_3):
+            if not find_role(rn):
+                await guild.create_role(name=rn, reason="BromeStriker: strike rol aanmaken")
+
+        muted = find_role(self.role_muted)
+        if not muted:
+            muted = await guild.create_role(name=self.role_muted, reason="BromeStriker: gedempt rol aanmaken")
+
+        # Set muted role permissions minimal: no send messages. View permissions managed via overwrites.
+        # Role permissions are global; channel overwrites are safer.
+        # We'll just keep role perms default and rely on channel overwrites for send messages.
+        # But we can apply overwrite to all text channels to block sending.
+        for ch in guild.channels:
+            if isinstance(ch, (discord.TextChannel, discord.Thread, discord.ForumChannel)):
+                try:
+                    ow = ch.overwrites_for(muted)
+                    changed = False
+                    if getattr(ow, "send_messages", None) is not False:
+                        ow.send_messages = False
+                        changed = True
+                    if getattr(ow, "add_reactions", None) is not False:
+                        ow.add_reactions = False
+                        changed = True
+                    if changed:
+                        await ch.set_permissions(muted, overwrite=ow, reason="BromeStriker: gedempt mag niet praten")
+                except Exception:
+                    # ignore channels we cannot edit
+                    continue
+
+        # Hide specific categories for muted role
+        for cat_id in self.hidden_category_ids:
+            cat = guild.get_channel(cat_id)
+            if isinstance(cat, discord.CategoryChannel):
+                try:
+                    ow = cat.overwrites_for(muted)
+                    ow.view_channel = False
+                    await cat.set_permissions(muted, overwrite=ow, reason="BromeStriker: verberg categorie voor gedempt")
+                except Exception:
+                    continue
+
+    def _is_preserved_role(self, role: discord.Role, guild: discord.Guild) -> bool:
+        if role.is_default():
+            return True
+        if role.id in self.preserve_role_ids:
+            return True
+        if role.name in self.preserve_role_names:
+            return True
+        # Always preserve strike + muted roles
+        if role.name in {self.role_strike_1, self.role_strike_2, self.role_strike_3, self.role_muted}:
+            return True
+        return False
+
+    async def _send_modlog(self, guild: discord.Guild, embed: discord.Embed) -> None:
+        if not self.modlog_channel_id:
+            return
+        ch = guild.get_channel(self.modlog_channel_id)
+        if isinstance(ch, discord.abc.Messageable):
+            try:
+                await ch.send(embed=embed)
+            except Exception:
+                pass
+
+    async def _dm_strike_embed(self, member: discord.Member, strike: int, duur_label: str, reden: str, moderator: discord.abc.User, guild: discord.Guild) -> None:
+        title = f"⚠️ Waarschuwing: Strike {strike}"
+        if strike == 3:
+            title = "⛔ Strike 3 — Je bent eruit"
+        embed = discord.Embed(
+            title=title,
+            description=f"Server: **{guild.name}**",
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Straf", value=duur_label, inline=False)
+        embed.add_field(name="Reden", value=reden or "(geen reden opgegeven)", inline=False)
+        embed.add_field(name="Moderator", value=str(moderator), inline=False)
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        try:
+            await member.send(embed=embed)
+        except Exception:
+            pass
+
+    async def _call_twitch_webhook(self, guild: discord.Guild, user: discord.Member, reason: str) -> None:
+        if not self.twitch_webhook:
+            return
+        # simple fire-and-forget HTTP call using aiohttp (already dependency of discord.py)
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as sess:
+                await sess.post(self.twitch_webhook, json={
+                    "guild_id": guild.id,
+                    "discord_user_id": user.id,
+                    "discord_tag": str(user),
+                    "reason": reason,
+                    "event": "strike3_ban",
+                }, timeout=10)
+        except Exception:
+            pass
+
+    async def _mute_watcher_loop(self) -> None:
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                now = int(time.time())
+                for row in self.db.due_mutes(now):
+                    guild_id = int(row["guild_id"])
+                    user_id = int(row["user_id"])
+                    roles_json = row["roles_json"]
+                    guild = self.get_guild(guild_id)
+                    if not guild:
+                        self.db.clear_mute(guild_id, user_id)
+                        continue
+                    member = guild.get_member(user_id)
+                    if not member:
+                        self.db.clear_mute(guild_id, user_id)
+                        continue
+                    await self._restore_roles_after_mute(guild, member, roles_json)
+                    self.db.clear_mute(guild_id, user_id)
+            except Exception as e:
+                print("Mute watcher error:", e)
+            await asyncio.sleep(10)
+
+    async def _restore_roles_after_mute(self, guild: discord.Guild, member: discord.Member, roles_json: str) -> None:
+        roles_ids = []
+        try:
+            roles_ids = json.loads(roles_json) or []
+        except Exception:
+            roles_ids = []
+        keep = set()
+        for r in member.roles:
+            if r.name in {self.role_muted, self.role_strike_1, self.role_strike_2, self.role_strike_3}:
+                keep.add(r.id)
+
+        target_roles = []
+        for rid in roles_ids:
+            role = guild.get_role(int(rid))
+            if role:
+                target_roles.append(role)
+
+        # also keep strike roles currently on user
+        for r in member.roles:
+            if r.id in keep:
+                role = guild.get_role(r.id)
+                if role and role not in target_roles:
+                    target_roles.append(role)
+
+        # remove muted role
+        muted = discord.utils.get(guild.roles, name=self.role_muted)
+        try:
+            if muted and muted in target_roles:
+                target_roles.remove(muted)
+        except Exception:
+            pass
+
+        try:
+            await member.edit(roles=target_roles, reason="BromeStriker: mute verlopen, rollen hersteld")
+        except Exception:
+            pass
+
+bot: Optional[BromeStriker] = None
+
+@app_commands.command(name="mute", description="Geef een strike en voer de standaard straf uit (24u / 7 dagen / ban)")
+@app_commands.describe(user="Gebruiker", reden="Reden (optioneel)")
+async def mute_cmd(interaction: discord.Interaction, user: discord.Member, reden: Optional[str] = None):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+
+    if not interaction.guild or not isinstance(interaction.user, (discord.Member, discord.User)):
+        return await interaction.followup.send("Dit commando werkt alleen in een server.", ephemeral=True)
+
+    guild = interaction.guild
+    await bot._ensure_roles(guild)
+
+    # Dedupe: if same interaction id already processed, ignore
+    inter_id = str(interaction.id)
+    if bot.db.seen_interaction(inter_id):
+        return await interaction.followup.send("⚠️ Dit commando is al verwerkt.", ephemeral=True)
+    bot.db.mark_interaction(inter_id)
+    bot.db.prune_interactions()
+
+    # permissions check
+    me = guild.me
+    if me is None:
+        return await interaction.followup.send("Ik kan mezelf niet vinden in deze server.", ephemeral=True)
+
+    # Can't act on admins above bot
+    if user.top_role >= me.top_role and user != guild.owner:
+        return await interaction.followup.send("❌ Ik kan deze gebruiker niet modereren (rol staat hoger of gelijk aan mij).", ephemeral=True)
+
+    # increment strike
+    strike = bot.db.increment_strikes(guild.id, user.id)
+
+    # roles
+    muted_role = discord.utils.get(guild.roles, name=bot.role_muted)
+    s1 = discord.utils.get(guild.roles, name=bot.role_strike_1)
+    s2 = discord.utils.get(guild.roles, name=bot.role_strike_2)
+    s3 = discord.utils.get(guild.roles, name=bot.role_strike_3)
+
+    # ensure roles exist
+    if not muted_role or not s1 or not s2 or not s3:
+        return await interaction.followup.send("❌ Rollen ontbreken (Strike 1/2/3 of Gedempt).", ephemeral=True)
+
+    # apply strike roles (remove others)
+    try:
+        if strike == 1:
+            await user.add_roles(s1, reason="BromeStriker: strike 1")
+        elif strike == 2:
+            await user.add_roles(s2, reason="BromeStriker: strike 2")
+        else:
+            await user.add_roles(s3, reason="BromeStriker: strike 3")
+        # keep strike roles tidy
+        if strike >= 2 and s1 in user.roles:
+            await user.remove_roles(s1, reason="BromeStriker: upgrade strike")
+        if strike >= 3 and s2 in user.roles:
+            await user.remove_roles(s2, reason="BromeStriker: upgrade strike")
+    except Exception:
+        pass
+
+    # Strike 3: ban + clear DB
+    if strike >= 3:
+        await bot._dm_strike_embed(user, 3, "Permanente ban", reden or "", interaction.user, guild)
+        await bot._call_twitch_webhook(guild, user, reden or "")
+        try:
+            await guild.ban(user, reason=f"Strike 3 - {reden or 'geen reden'}", delete_message_seconds=0)
+        except Exception as e:
+            return await interaction.followup.send(f"❌ Ban mislukt: {e}", ephemeral=True)
+        # Clear strikes + mute rows
+        bot.db.delete_strikes(guild.id, user.id)
+        bot.db.clear_mute(guild.id, user.id)
+        # modlog
+        emb = discord.Embed(title="⛔ Strike 3 — Ban", description=f"**{user}** is verbannen.", timestamp=discord.utils.utcnow())
+        emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
+        emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
+        await bot._send_modlog(guild, emb)
+        return await interaction.followup.send(f"⛔ **{user}** heeft **Strike 3** gekregen en is **permanent verbannen**.", ephemeral=True)
+
+    # For strike 1/2: mute with durations
+    duration = STRIKE1_DURATION if strike == 1 else STRIKE2_DURATION
+    label = "24 uur" if strike == 1 else "7 dagen"
+    unmute_at = int(time.time()) + duration
+
+    # Save current roles to restore, but preserve baseline roles
+    current_roles = [r.id for r in user.roles if not bot._is_preserved_role(r, guild)]
+    roles_json = json.dumps(current_roles)
+    bot.db.upsert_mute(guild.id, user.id, roles_json, unmute_at)
+
+    # Strip non-preserved roles (keep @everyone, preserved, strike roles)
+    target_roles = [r for r in user.roles if bot._is_preserved_role(r, guild)]
+    if muted_role not in target_roles:
+        target_roles.append(muted_role)
+
+    try:
+        await user.edit(roles=target_roles, reason=f"BromeStriker: strike {strike} mute")
+    except Exception as e:
+        return await interaction.followup.send(f"❌ Rollen aanpassen mislukt: {e}", ephemeral=True)
+
+    # DM embed
+    await bot._dm_strike_embed(user, strike, f"Mute: {label}", reden or "", interaction.user, guild)
+
+    # modlog
+    emb = discord.Embed(title=f"🔇 Strike {strike} — Mute", description=f"**{user}** is gedempt.", timestamp=discord.utils.utcnow())
+    emb.add_field(name="Duur", value=label, inline=True)
+    emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
+    emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
+    await bot._send_modlog(guild, emb)
+
+    return await interaction.followup.send(f"🔇 **{user}** kreeg **Strike {strike}** → dempen voor **{label}**.", ephemeral=True)
+
+@app_commands.command(name="unmute", description="Haal demping weg en herstel rollen")
+@app_commands.describe(user="Gebruiker", reden="Reden (optioneel)")
+async def unmute_cmd(interaction: discord.Interaction, user: discord.Member, reden: Optional[str] = None):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+    guild = interaction.guild
+    await bot._ensure_roles(guild)
+
+    row = None
+    # fetch mute row if exists
+    cur = bot.db.conn.cursor()
+    cur.execute("SELECT roles_json FROM mutes WHERE guild_id=? AND user_id=?", (guild.id, user.id))
+    row = cur.fetchone()
+    roles_json = row[0] if row else "[]"
+    await bot._restore_roles_after_mute(guild, user, roles_json)
+    bot.db.clear_mute(guild.id, user.id)
+    return await interaction.followup.send(f"✅ **{user}** is ontdempt en rollen zijn hersteld.", ephemeral=True)
+
+@app_commands.command(name="strikes", description="Bekijk het aantal strikes van een gebruiker")
+@app_commands.describe(user="Gebruiker")
+async def strikes_cmd(interaction: discord.Interaction, user: discord.Member):
+    assert bot is not None
+    if not interaction.guild:
+        return await interaction.response.send_message("Alleen in een server.", ephemeral=True)
+    s = bot.db.get_strikes(interaction.guild.id, user.id)
+    # PUBLIC message
+    return await interaction.response.send_message(f"📌 **{user}** heeft **{s}** strike(s).", ephemeral=False)
+
+@app_commands.command(name="resetstrikes", description="Reset strikes van een gebruiker")
+@app_commands.describe(user="Gebruiker", reden="Reden (optioneel)")
+async def reset_strikes_cmd(interaction: discord.Interaction, user: discord.Member, reden: Optional[str] = None):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+    guild = interaction.guild
+    bot.db.delete_strikes(guild.id, user.id)
+
+    # remove strike roles if present
+    s1 = discord.utils.get(guild.roles, name=bot.role_strike_1)
+    s2 = discord.utils.get(guild.roles, name=bot.role_strike_2)
+    s3 = discord.utils.get(guild.roles, name=bot.role_strike_3)
+    try:
+        to_remove = [r for r in [s1, s2, s3] if r and r in user.roles]
+        if to_remove:
+            await user.remove_roles(*to_remove, reason=f"BromeStriker: reset strikes - {reden or ''}")
+    except Exception:
+        pass
+    return await interaction.followup.send(f"♻️ Strikes van **{user}** zijn gereset naar 0.", ephemeral=True)
+
+def main() -> None:
+    global bot
+    load_dotenv()
+    token = (os.getenv("DISCORD_TOKEN", "") or "").strip()
+    guild_id = int(os.getenv("GUILD_ID", "0") or "0")
+    modlog = os.getenv("MODLOG_CHANNEL_ID", "").strip()
+    modlog_id = int(modlog) if modlog.isdigit() else None
+
+    if not token or not guild_id:
+        raise SystemExit("DISCORD_TOKEN en GUILD_ID zijn verplicht in .env")
+
+    db_path = os.path.join(os.getcwd(), "data", "bromestriker.db")
+    bot = BromeStriker(guild_id=guild_id, db_path=db_path, modlog_channel_id=modlog_id)
+
+    # register commands on the tree
+    bot.tree.add_command(mute_cmd)
+    bot.tree.add_command(unmute_cmd)
+    bot.tree.add_command(strikes_cmd)
+    bot.tree.add_command(reset_strikes_cmd)
+
+    bot.run(token)
