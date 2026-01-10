@@ -15,6 +15,23 @@ from .db import DB
 STRIKE1_DURATION = 24 * 60 * 60
 STRIKE2_DURATION = 7 * 24 * 60 * 60
 
+# --- Hard config (server-specific role IDs) ---
+# Strikes
+STRIKE1_ROLE_ID = 1459637702055039088
+STRIKE2_ROLE_ID = 1459637763652718663
+STRIKE3_ROLE_ID = 1459637807281602703
+# Muted role
+MUTED_ROLE_ID = 1042562173643268230
+
+# Roles we never want to strip during a mute.
+# NOTE: MUTED_ROLE_ID is *not* protected during /unmute because we explicitly remove it.
+PROTECTED_ROLE_IDS: Set[int] = {
+    STRIKE1_ROLE_ID,
+    STRIKE2_ROLE_ID,
+    STRIKE3_ROLE_ID,
+    MUTED_ROLE_ID,
+}
+
 def _parse_csv_ids(val: str) -> Set[int]:
     out: Set[int] = set()
     for part in (val or "").split(","):
@@ -77,12 +94,18 @@ class BromeStriker(commands.Bot):
         def find_role(name: str) -> Optional[discord.Role]:
             return discord.utils.get(guild.roles, name=name)
 
-        # Strike roles
-        for rn in (self.role_strike_1, self.role_strike_2, self.role_strike_3):
-            if not find_role(rn):
-                await guild.create_role(name=rn, reason="BromeStriker: strike rol aanmaken")
+        def find_role_by_id_or_name(role_id: int, name: str) -> Optional[discord.Role]:
+            return guild.get_role(role_id) or find_role(name)
 
-        muted = find_role(self.role_muted)
+        # Strike roles (prefer fixed IDs, but fall back to name)
+        if not find_role_by_id_or_name(STRIKE1_ROLE_ID, self.role_strike_1):
+            await guild.create_role(name=self.role_strike_1, reason="BromeStriker: strike rol aanmaken")
+        if not find_role_by_id_or_name(STRIKE2_ROLE_ID, self.role_strike_2):
+            await guild.create_role(name=self.role_strike_2, reason="BromeStriker: strike rol aanmaken")
+        if not find_role_by_id_or_name(STRIKE3_ROLE_ID, self.role_strike_3):
+            await guild.create_role(name=self.role_strike_3, reason="BromeStriker: strike rol aanmaken")
+
+        muted = find_role_by_id_or_name(MUTED_ROLE_ID, self.role_muted)
         if not muted:
             muted = await guild.create_role(name=self.role_muted, reason="BromeStriker: gedempt rol aanmaken")
 
@@ -125,7 +148,9 @@ class BromeStriker(commands.Bot):
             return True
         if role.name in self.preserve_role_names:
             return True
-        # Always preserve strike + muted roles
+        # Always preserve strike + muted roles (by ID when possible)
+        if role.id in PROTECTED_ROLE_IDS:
+            return True
         if role.name in {self.role_strike_1, self.role_strike_2, self.role_strike_3, self.role_muted}:
             return True
         return False
@@ -150,6 +175,30 @@ class BromeStriker(commands.Bot):
             timestamp=discord.utils.utcnow(),
         )
         embed.add_field(name="Straf", value=duur_label, inline=False)
+        embed.add_field(name="Reden", value=reden or "(geen reden opgegeven)", inline=False)
+        embed.add_field(name="Moderator", value=str(moderator), inline=False)
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        try:
+            await member.send(embed=embed)
+        except Exception:
+            pass
+
+    async def _dm_mod_embed(
+        self,
+        member: discord.Member,
+        action_title: str,
+        action_value: str,
+        reden: str,
+        moderator: discord.abc.User,
+        guild: discord.Guild,
+    ) -> None:
+        embed = discord.Embed(
+            title=action_title,
+            description=f"Server: **{guild.name}**",
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Actie", value=action_value, inline=False)
         embed.add_field(name="Reden", value=reden or "(geen reden opgegeven)", inline=False)
         embed.add_field(name="Moderator", value=str(moderator), inline=False)
         if guild.icon:
@@ -270,29 +319,38 @@ async def mute_cmd(interaction: discord.Interaction, user: discord.Member, reden
     strike = bot.db.increment_strikes(guild.id, user.id)
 
     # roles
-    muted_role = discord.utils.get(guild.roles, name=bot.role_muted)
-    s1 = discord.utils.get(guild.roles, name=bot.role_strike_1)
-    s2 = discord.utils.get(guild.roles, name=bot.role_strike_2)
-    s3 = discord.utils.get(guild.roles, name=bot.role_strike_3)
+    # Prefer the fixed IDs (so we never miss them due to cache/name mismatches)
+    muted_role = guild.get_role(MUTED_ROLE_ID) or discord.utils.get(guild.roles, name=bot.role_muted)
+    s1 = guild.get_role(STRIKE1_ROLE_ID) or discord.utils.get(guild.roles, name=bot.role_strike_1)
+    s2 = guild.get_role(STRIKE2_ROLE_ID) or discord.utils.get(guild.roles, name=bot.role_strike_2)
+    s3 = guild.get_role(STRIKE3_ROLE_ID) or discord.utils.get(guild.roles, name=bot.role_strike_3)
 
     # ensure roles exist
     if not muted_role or not s1 or not s2 or not s3:
         return await interaction.followup.send("❌ Rollen ontbreken (Strike 1/2/3 of Gedempt).", ephemeral=True)
 
     # apply strike roles (remove others)
+    # Apply strike roles. IMPORTANT: we later do member.edit(roles=...), so we must
+    # ensure the active strike role is explicitly included there too (discord cache can lag).
+    active_strike_role: Optional[discord.Role] = None
     try:
         if strike == 1:
+            active_strike_role = s1
             await user.add_roles(s1, reason="BromeStriker: strike 1")
         elif strike == 2:
+            active_strike_role = s2
             await user.add_roles(s2, reason="BromeStriker: strike 2")
         else:
+            active_strike_role = s3
             await user.add_roles(s3, reason="BromeStriker: strike 3")
-        # keep strike roles tidy
-        if strike >= 2 and s1 in user.roles:
+
+        # keep strike roles tidy (remove lower strikes)
+        if strike >= 2 and s1 and s1 in user.roles:
             await user.remove_roles(s1, reason="BromeStriker: upgrade strike")
-        if strike >= 3 and s2 in user.roles:
+        if strike >= 3 and s2 and s2 in user.roles:
             await user.remove_roles(s2, reason="BromeStriker: upgrade strike")
     except Exception:
+        # even if adding fails, we continue (the later member.edit may still work)
         pass
 
     # Strike 3: ban + clear DB
@@ -325,6 +383,10 @@ async def mute_cmd(interaction: discord.Interaction, user: discord.Member, reden
 
     # Strip non-preserved roles (keep @everyone, preserved, strike roles)
     target_roles = [r for r in user.roles if bot._is_preserved_role(r, guild)]
+
+    # FORCE include the active strike role so it doesn't get dropped by member.edit(...)
+    if active_strike_role and active_strike_role not in target_roles:
+        target_roles.append(active_strike_role)
     if muted_role not in target_roles:
         target_roles.append(muted_role)
 
@@ -397,6 +459,104 @@ async def reset_strikes_cmd(interaction: discord.Interaction, user: discord.Memb
         pass
     return await interaction.followup.send(f"♻️ Strikes van **{user}** zijn gereset naar 0.", ephemeral=True)
 
+
+# -------------------------
+# Extra standaard moderation commands
+# -------------------------
+
+@app_commands.command(name="warn", description="Geef een waarschuwing (met DM) en log in het modlog kanaal")
+@app_commands.describe(user="Gebruiker", reden="Reden (optioneel)")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def warn_cmd(interaction: discord.Interaction, user: discord.Member, reden: Optional[str] = None):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+    guild = interaction.guild
+    await bot._dm_mod_embed(user, "⚠️ Waarschuwing", "Warning", reden or "", interaction.user, guild)
+
+    emb = discord.Embed(title="⚠️ Warning", description=f"**{user}** is gewaarschuwd.", timestamp=discord.utils.utcnow())
+    emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
+    emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
+    await bot._send_modlog(guild, emb)
+
+    return await interaction.followup.send(f"⚠️ **{user}** is gewaarschuwd.", ephemeral=True)
+
+
+@app_commands.command(name="kick", description="Kick een gebruiker (met DM) en log in het modlog kanaal")
+@app_commands.describe(user="Gebruiker", reden="Reden (optioneel)")
+@app_commands.checks.has_permissions(kick_members=True)
+async def kick_cmd(interaction: discord.Interaction, user: discord.Member, reden: Optional[str] = None):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+    guild = interaction.guild
+
+    # safety: role hierarchy
+    me = guild.me
+    if me is None:
+        return await interaction.followup.send("Ik kan mezelf niet vinden in deze server.", ephemeral=True)
+    if user.top_role >= me.top_role and user != guild.owner:
+        return await interaction.followup.send("❌ Ik kan deze gebruiker niet kicken (rol staat hoger of gelijk aan mij).", ephemeral=True)
+
+    await bot._dm_mod_embed(user, "👢 Kick", "Je bent van de server gekickt", reden or "", interaction.user, guild)
+
+    try:
+        await user.kick(reason=f"Kick - {reden or 'geen reden'}")
+    except Exception as e:
+        return await interaction.followup.send(f"❌ Kick mislukt: {e}", ephemeral=True)
+
+    emb = discord.Embed(title="👢 Kick", description=f"**{user}** is gekickt.", timestamp=discord.utils.utcnow())
+    emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
+    emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
+    await bot._send_modlog(guild, emb)
+
+    return await interaction.followup.send(f"👢 **{user}** is gekickt.", ephemeral=True)
+
+
+@app_commands.command(name="ban", description="Ban een gebruiker (eerst DM, dan na 5s ban) en log in modlog")
+@app_commands.describe(user="Gebruiker", reden="Reden (optioneel)", verwijder_berichten="Verwijder berichten van de laatste X dagen (0-7)")
+@app_commands.checks.has_permissions(ban_members=True)
+async def ban_cmd(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    reden: Optional[str] = None,
+    verwijder_berichten: Optional[int] = 0,
+):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+    guild = interaction.guild
+
+    # safety: role hierarchy
+    me = guild.me
+    if me is None:
+        return await interaction.followup.send("Ik kan mezelf niet vinden in deze server.", ephemeral=True)
+    if user.top_role >= me.top_role and user != guild.owner:
+        return await interaction.followup.send("❌ Ik kan deze gebruiker niet bannen (rol staat hoger of gelijk aan mij).", ephemeral=True)
+
+    days = int(verwijder_berichten or 0)
+    days = max(0, min(7, days))
+    delete_seconds = days * 24 * 60 * 60
+
+    await bot._dm_mod_embed(user, "⛔ Ban", "Je bent van de server verbannen", reden or "", interaction.user, guild)
+    await asyncio.sleep(5)
+
+    try:
+        await guild.ban(user, reason=f"Ban - {reden or 'geen reden'}", delete_message_seconds=delete_seconds)
+    except Exception as e:
+        return await interaction.followup.send(f"❌ Ban mislukt: {e}", ephemeral=True)
+
+    emb = discord.Embed(title="⛔ Ban", description=f"**{user}** is verbannen.", timestamp=discord.utils.utcnow())
+    emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
+    emb.add_field(name="Berichten verwijderd", value=f"{days} dag(en)", inline=True)
+    emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
+    await bot._send_modlog(guild, emb)
+
+    return await interaction.followup.send(f"⛔ **{user}** is verbannen.", ephemeral=True)
+
 def main() -> None:
     global bot
     load_dotenv()
@@ -416,5 +576,8 @@ def main() -> None:
     bot.tree.add_command(unmute_cmd)
     bot.tree.add_command(strikes_cmd)
     bot.tree.add_command(reset_strikes_cmd)
+    bot.tree.add_command(warn_cmd)
+    bot.tree.add_command(kick_cmd)
+    bot.tree.add_command(ban_cmd)
 
     bot.run(token)
