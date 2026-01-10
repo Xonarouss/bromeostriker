@@ -11,6 +11,15 @@ class DB:
     def _init(self) -> None:
         cur = self.conn.cursor()
         cur.execute("""
+        CREATE TABLE IF NOT EXISTS warns (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            warns INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        """)
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS strikes (
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
@@ -55,6 +64,38 @@ class DB:
         self.conn.commit()
 
     # --- strikes ---
+    # --- warns ---
+    def get_warns(self, guild_id: int, user_id: int) -> int:
+        cur = self.conn.cursor()
+        cur.execute("SELECT warns FROM warns WHERE guild_id=? AND user_id=?", (guild_id, user_id))
+        row = cur.fetchone()
+        return int(row["warns"]) if row else 0
+
+    def set_warns(self, guild_id: int, user_id: int, warns: int) -> None:
+        now = int(time.time())
+        cur = self.conn.cursor()
+        cur.execute("""
+            INSERT INTO warns (guild_id, user_id, warns, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id, user_id) DO UPDATE SET warns=excluded.warns, updated_at=excluded.updated_at
+        """, (guild_id, user_id, warns, now))
+        self.conn.commit()
+
+    def increment_warns(self, guild_id: int, user_id: int) -> int:
+        w = self.get_warns(guild_id, user_id) + 1
+        self.set_warns(guild_id, user_id, w)
+        return w
+
+    def decrement_warns(self, guild_id: int, user_id: int, amount: int = 1) -> int:
+        w = max(0, self.get_warns(guild_id, user_id) - max(1, amount))
+        self.set_warns(guild_id, user_id, w)
+        return w
+
+    def delete_warns(self, guild_id: int, user_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM warns WHERE guild_id=? AND user_id=?", (guild_id, user_id))
+        self.conn.commit()
+
     def get_strikes(self, guild_id: int, user_id: int) -> int:
         cur = self.conn.cursor()
         cur.execute("SELECT strikes FROM strikes WHERE guild_id=? AND user_id=?", (guild_id, user_id))

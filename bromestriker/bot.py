@@ -473,14 +473,115 @@ async def warn_cmd(interaction: discord.Interaction, user: discord.Member, reden
     if not interaction.guild:
         return await interaction.followup.send("Alleen in een server.", ephemeral=True)
     guild = interaction.guild
-    await bot._dm_mod_embed(user, "⚠️ Waarschuwing", "Warning", reden or "", interaction.user, guild)
+    warn_count = bot.db.increment_warns(guild.id, user.id)
 
-    emb = discord.Embed(title="⚠️ Warning", description=f"**{user}** is gewaarschuwd.", timestamp=discord.utils.utcnow())
+    await bot._dm_mod_embed(user, "⚠️ Waarschuwing", f"Warning (totaal: {warn_count})", reden or "", interaction.user, guild)
+
+    emb = discord.Embed(title="⚠️ Warning", description=f"**{user}** is gewaarschuwd. (totaal: {warn_count})", timestamp=discord.utils.utcnow())
     emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
     emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
     await bot._send_modlog(guild, emb)
 
-    return await interaction.followup.send(f"⚠️ **{user}** is gewaarschuwd.", ephemeral=True)
+    return await interaction.followup.send(f"⚠️ **{user}** is gewaarschuwd. (totaal warns: {warn_count})", ephemeral=True)
+
+
+@app_commands.command(name="warns", description="Bekijk het aantal waarschuwingen van een gebruiker")
+@app_commands.describe(user="Gebruiker")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def warns_cmd(interaction: discord.Interaction, user: discord.Member):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+    guild = interaction.guild
+    w = bot.db.get_warns(guild.id, user.id)
+
+    emb = discord.Embed(title="📋 Waarschuwingen", description=f"**{user}** heeft **{w}** warn(s).", timestamp=discord.utils.utcnow())
+    emb.add_field(name="Gebruiker", value=str(user), inline=False)
+    await bot._send_modlog(guild, discord.Embed(title="📋 Warns bekeken", description=f"{interaction.user} bekeek warns van **{user}** (totaal: {w}).", timestamp=discord.utils.utcnow()))
+
+    return await interaction.followup.send(embed=emb, ephemeral=True)
+
+
+@app_commands.command(name="removewarn", description="Verwijder 1 (of meer) waarschuwing(en) van een gebruiker")
+@app_commands.describe(user="Gebruiker", aantal="Hoeveel warns verwijderen (default 1)", reden="Reden (optioneel)")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def removewarn_cmd(interaction: discord.Interaction, user: discord.Member, aantal: Optional[int] = 1, reden: Optional[str] = None):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+    guild = interaction.guild
+
+    amt = int(aantal or 1)
+    amt = max(1, min(50, amt))
+    new_count = bot.db.decrement_warns(guild.id, user.id, amt)
+
+    emb = discord.Embed(title="➖ Remove warn", description=f"Warn(s) verwijderd bij **{user}**.", timestamp=discord.utils.utcnow())
+    emb.add_field(name="Aantal", value=str(amt), inline=True)
+    emb.add_field(name="Nieuwe totaal", value=str(new_count), inline=True)
+    emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
+    emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
+    await bot._send_modlog(guild, emb)
+
+    return await interaction.followup.send(f"➖ Warn(s) verwijderd. **{user}** heeft nu {new_count} warn(s).", ephemeral=True)
+
+
+@app_commands.command(name="resetwarns", description="Reset waarschuwingen van een gebruiker naar 0")
+@app_commands.describe(user="Gebruiker", reden="Reden (optioneel)")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def resetwarns_cmd(interaction: discord.Interaction, user: discord.Member, reden: Optional[str] = None):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+    guild = interaction.guild
+
+    bot.db.delete_warns(guild.id, user.id)
+
+    emb = discord.Embed(title="♻️ Reset warns", description=f"Warns van **{user}** zijn gereset naar 0.", timestamp=discord.utils.utcnow())
+    emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
+    emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
+    await bot._send_modlog(guild, emb)
+
+    return await interaction.followup.send(f"♻️ Warns van **{user}** zijn gereset naar 0.", ephemeral=True)
+
+
+@app_commands.command(name="purge", description="Verwijder berichten (optioneel alleen van een gebruiker)")
+@app_commands.describe(aantal="Aantal berichten (1-200)", user="Alleen berichten van deze gebruiker (optioneel)", reden="Reden (optioneel)")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge_cmd(interaction: discord.Interaction, aantal: int, user: Optional[discord.Member] = None, reden: Optional[str] = None):
+    assert bot is not None
+    await interaction.response.defer(ephemeral=True)
+    if not interaction.guild:
+        return await interaction.followup.send("Alleen in een server.", ephemeral=True)
+
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        return await interaction.followup.send("❌ Purge kan alleen in een tekstkanaal.", ephemeral=True)
+
+    limit = max(1, min(200, int(aantal)))
+
+    def _check(msg: discord.Message) -> bool:
+        if user is None:
+            return True
+        return msg.author.id == user.id
+
+    try:
+        deleted = await channel.purge(limit=limit, check=_check, reason=f"Purge - {reden or 'geen reden'}")
+    except Exception as e:
+        return await interaction.followup.send(f"❌ Purge mislukt: {e}", ephemeral=True)
+
+    count = len(deleted)
+    guild = interaction.guild
+
+    emb = discord.Embed(title="🧹 Purge", description=f"{count} bericht(en) verwijderd in {channel.mention}.", timestamp=discord.utils.utcnow())
+    emb.add_field(name="Filter", value=(str(user) if user else "(geen, alles)"), inline=False)
+    emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
+    emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
+    await bot._send_modlog(guild, emb)
+
+    return await interaction.followup.send(f"🧹 Verwijderd: {count} bericht(en).", ephemeral=True)
 
 
 @app_commands.command(name="kick", description="Kick een gebruiker (met DM) en log in het modlog kanaal")
@@ -577,6 +678,10 @@ def main() -> None:
     bot.tree.add_command(strikes_cmd)
     bot.tree.add_command(reset_strikes_cmd)
     bot.tree.add_command(warn_cmd)
+    bot.tree.add_command(warns_cmd)
+    bot.tree.add_command(removewarn_cmd)
+    bot.tree.add_command(resetwarns_cmd)
+    bot.tree.add_command(purge_cmd)
     bot.tree.add_command(kick_cmd)
     bot.tree.add_command(ban_cmd)
 
