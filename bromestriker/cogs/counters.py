@@ -4,15 +4,15 @@ import asyncio
 import aiohttp
 import logging
 log = logging.getLogger('bromestriker.counters')
+log.warning('✅ Counters loaded: SCRAPING-ONLY build (IG/TikTok)')
 import re
+import json
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
 import discord
 from discord import app_commands
 from discord.ext import commands
-
-from ..webserver import refresh_tiktok_access_token_if_needed
 
 def _fmt_nl(n: Optional[int]) -> str:
     if n is None:
@@ -86,12 +86,8 @@ class Counters(commands.Cog):
 
         # Official API tokens (optional):
         # Instagram Graph API requires an IG User id + access token with proper permissions (business/creator).
-        self.ig_user_id = (os.getenv("IG_USER_ID") or "").strip()
-        self.ig_access_token = (os.getenv("IG_ACCESS_TOKEN") or "").strip()
-        self.ig_graph_version = (os.getenv("IG_GRAPH_VERSION") or "v20.0").strip()
 
         # TikTok API v2 Get User Info requires a user access token with user.info.stats scope.
-        self.tiktok_access_token = (os.getenv("TIKTOK_ACCESS_TOKEN") or "").strip()
 
         # Scraping mode (no OAuth / no business verification). If username is set, we scrape public profile pages.
         # Note: scraping can break if platforms change their HTML/JSON, but it's how most counter bots work.
@@ -137,126 +133,120 @@ class Counters(commands.Cog):
             mult = 1000000
         return int(val * mult)
 
+    
     async def _get_instagram_followers(self) -> Optional[int]:
-        """Return Instagram follower count (scrape first, fallback to official API)."""
-        # 1) Scrape (preferred)
-        if self.instagram_username:
-            url = f"https://www.instagram.com/{self.instagram_username}/"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9,nl;q=0.8",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            }
-            try:
-                async with aiohttp.ClientSession(headers=headers) as session:
-                    async with session.get(url, timeout=20) as resp:
-                        if resp.status >= 400:
-                            log.warning("Instagram scrape HTTP %s", resp.status)
-                            return None
-                        html = await resp.text()
-
-                # Common embedded JSON patterns
-                m = re.search(r'"edge_followed_by"\s*:\s*\{"count"\s*:\s*(\d+)', html)
-                if m:
-                    return int(m.group(1))
-
-                m = re.search(r'"followers_count"\s*:\s*(\d+)', html)
-                if m:
-                    return int(m.group(1))
-
-                # Meta OG description often contains follower count
-                m = re.search(r'property="og:description"\s+content="([^"]+)"', html)
-                if m:
-                    desc = m.group(1)
-                    m2 = re.search(r"([0-9][0-9\.,]*\s*[kmKM]?)\s+Followers", desc, re.I)
-                    if m2:
-                        return self._parse_compact_number(m2.group(1))
-
-                log.warning("Instagram scrape: pattern not found for %s", self.instagram_username)
-                return None
-            except Exception as e:
-                log.exception("Instagram scrape failed: %s", e)
-                return None
-
-        # 2) Official Graph API fallback
-        if not self.ig_user_id or not self.ig_access_token:
+        """Instagram follower count via web scraping (no API)."""
+        if not self.instagram_username:
             return None
+
+        url = f"https://www.instagram.com/{self.instagram_username}/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
+
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"https://graph.facebook.com/{self.ig_graph_version}/{self.ig_user_id}"
-                params = {"fields": "followers_count", "access_token": self.ig_access_token}
-                async with session.get(url, params=params, timeout=15) as resp:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url, timeout=25, allow_redirects=True) as resp:
                     if resp.status >= 400:
-                        log.warning("Instagram API HTTP %s", resp.status)
+                        log.warning("Instagram scrape HTTP %s", resp.status)
                         return None
-                    data = await resp.json()
-                    val = data.get("followers_count")
-                    return int(val) if val is not None else None
-        except Exception as e:
-            log.exception("Instagram API failed: %s", e)
+                    html = await resp.text()
+
+            # Common embedded JSON key (legacy)
+            m = re.search(r'"edge_followed_by":\{"count":(\d+)\}', html)
+            if m:
+                return int(m.group(1))
+
+            # Newer keys sometimes contain followers_count
+            m = re.search(r'"followers_count"\s*:\s*(\d+)', html)
+            if m:
+                return int(m.group(1))
+
+            # Fallback: og:description contains e.g. "123K Followers"
+            m = re.search(r'property="og:description"\s+content="([^"]+)"', html)
+            if m:
+                desc = m.group(1)
+                # Try "X Followers" or Dutch variants
+                m2 = re.search(r'([0-9][0-9\.,]*\s*[KkMm]?)\s*(?:Followers|Volgers)', desc)
+                if m2:
+                    return self._parse_compact_number(m2.group(1))
+
+            log.warning("Instagram scrape: pattern not found")
             return None
 
+        except Exception as e:
+            log.exception("Instagram scrape failed: %s", e)
+            return None
+
+
+    
     async def _get_tiktok_followers(self) -> Optional[int]:
-        """Return TikTok follower count (scrape first, fallback to official API)."""
-        # 1) Scrape (preferred)
-        if self.tiktok_username:
-            url = f"https://www.tiktok.com/@{self.tiktok_username}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9,nl;q=0.8",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            }
-            try:
-                async with aiohttp.ClientSession(headers=headers) as session:
-                    async with session.get(url, timeout=20) as resp:
-                        if resp.status >= 400:
-                            log.warning("TikTok scrape HTTP %s", resp.status)
-                            return None
-                        html = await resp.text()
-
-                # Common embedded JSON patterns
-                m = re.search(r'"followerCount"\s*:\s*(\d+)', html)
-                if m:
-                    return int(m.group(1))
-                m = re.search(r'"follower_count"\s*:\s*(\d+)', html)
-                if m:
-                    return int(m.group(1))
-                # Sometimes in meta description
-                m = re.search(r'property="og:description"\s+content="([^"]+)"', html)
-                if m:
-                    desc = m.group(1)
-                    m2 = re.search(r"([0-9][0-9\.,]*\s*[kmKM]?)\s+Followers", desc, re.I)
-                    if m2:
-                        return self._parse_compact_number(m2.group(1))
-
-                log.warning("TikTok scrape: pattern not found for %s", self.tiktok_username)
-                return None
-            except Exception as e:
-                log.exception("TikTok scrape failed: %s", e)
-                return None
-
-        # 2) Official API fallback
-        try:
-            token = await refresh_tiktok_access_token_if_needed()
-            if not token:
-                token = self.tiktok_access_token
-            if not token:
-                return None
-            url = "https://open.tiktokapis.com/v2/user/info/"
-            params = {"fields": "follower_count"}
-            headers = {"Authorization": f"Bearer {token}"}
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=headers, timeout=15) as resp:
-                    if resp.status >= 400:
-                        log.warning("TikTok API HTTP %s", resp.status)
-                        return None
-                    data = await resp.json()
-                    user = (data.get("data") or {}).get("user") or {}
-                    val = user.get("follower_count")
-                    return int(val) if val is not None else None
-        except Exception as e:
-            log.exception("TikTok API failed: %s", e)
+        """TikTok follower count via web scraping (no API)."""
+        if not self.tiktok_username:
             return None
+
+        url = f"https://www.tiktok.com/@{self.tiktok_username}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
+
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url, timeout=25, allow_redirects=True) as resp:
+                    if resp.status >= 400:
+                        log.warning("TikTok scrape HTTP %s", resp.status)
+                        return None
+                    html = await resp.text()
+
+            # Fast path: JSON often contains followerCount
+            m = re.search(r'"followerCount"\s*:\s*(\d+)', html)
+            if m:
+                return int(m.group(1))
+
+            # SIGI_STATE contains full JSON
+            m = re.search(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', html, re.S)
+            if m:
+                try:
+                    data = json.loads(m.group(1))
+                    # Try common path: UserModule -> users -> <uniqueId> -> stats -> followerCount
+                    users = (((data or {}).get("UserModule") or {}).get("users") or {})
+                    user = users.get(self.tiktok_username) or users.get(self.tiktok_username.lower())
+                    if user:
+                        stats = user.get("stats") or {}
+                        fc = stats.get("followerCount")
+                        if isinstance(fc, int):
+                            return fc
+                except Exception:
+                    pass
+
+            # Another blob sometimes exists
+            m = re.search(r'__UNIVERSAL_DATA_FOR_REHYDRATION__"\s*:\s*(\{.*?\})\s*,\s*"__DEFAULT_SCOPE__', html, re.S)
+            if m:
+                try:
+                    data = json.loads(m.group(1))
+                    # Try to find follower count anywhere in this blob
+                    s = json.dumps(data)
+                    m2 = re.search(r'"followerCount"\s*:\s*(\d+)', s)
+                    if m2:
+                        return int(m2.group(1))
+                except Exception:
+                    pass
+
+            log.warning("TikTok scrape: pattern not found")
+            return None
+
+        except Exception as e:
+            log.exception("TikTok scrape failed: %s", e)
+            return None
+
 
     async def cog_load(self) -> None:
         # Start loop only once bot is ready-ish

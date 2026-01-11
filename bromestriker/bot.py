@@ -10,7 +10,6 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from .webserver import start_webserver_in_thread
 from .db import DB
 from .cogs.music import Music
 from .cogs.weather import Weather
@@ -694,7 +693,7 @@ def main() -> None:
 
     # Start OAuth web endpoints (TikTok) if enabled
     os.environ.setdefault("DB_PATH", db_path)
-    start_webserver_in_thread()
+    # Webserver disabled in scraping-only build
 
     bot = BromeStriker(guild_id=guild_id, db_path=db_path, modlog_channel_id=modlog_id)
     bot.run(token)
