@@ -123,7 +123,7 @@ class BromeStriker(commands.Bot):
 
         # ---- Streaming presence (requested) ----
         # Discord "Streaming" activity REQUIRES a URL.
-        stream_url = (os.getenv("BOT_STREAM_URL") or "https://twitch.tv/bromeolive2").strip()
+        stream_url = (os.getenv("BOT_STREAM_URL") or "https://twitch.tv/bromeolive").strip()
         activity = discord.Streaming(
             name="BromeoFam in de gaten aan het houden 👀",
             url=stream_url,
