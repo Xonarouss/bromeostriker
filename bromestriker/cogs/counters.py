@@ -71,7 +71,7 @@ class Counters(commands.Cog):
         self.category_name = (os.getenv("COUNTER_CATEGORY_NAME") or "📊 Counters").strip()
 
         # default templates (match the common "counter voice channels" look)
-        self.tpl_members = (os.getenv("COUNTER_MEMBERS_TEMPLATE") or "👥 Members: {count}").strip()
+        self.tpl_members = (os.getenv("COUNTER_MEMBERS_TEMPLATE") or "👥 Leden: {count}").strip()
         self.tpl_twitch = (os.getenv("COUNTER_TWITCH_TEMPLATE") or "📺 Twitch: {count}").strip()
         self.tpl_instagram = (os.getenv("COUNTER_INSTAGRAM_TEMPLATE") or "📸 Instagram: {count}").strip()
         self.tpl_tiktok = (os.getenv("COUNTER_TIKTOK_TEMPLATE") or "🎵 TikTok: {count}").strip()
