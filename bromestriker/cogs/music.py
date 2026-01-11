@@ -385,7 +385,7 @@ class Music(commands.Cog):
                 opts["cookiefile"] = cookiefile
 
             # YouTube: android client is most stable on VPS
-            opts["extractor_args"] = {"youtube": {"player_client": ["android"], "skip": ["dash", "hls"]}}
+            opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"], "skip": ["dash", "hls"]}}
             opts["format"] = "bestaudio[acodec^=opus]/bestaudio[ext=m4a]/bestaudio/best"
             opts["format_sort"] = ["acodec:opus", "abr", "asr", "ext"]
 
