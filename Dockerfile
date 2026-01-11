@@ -10,5 +10,4 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
 
-# Coolify / Docker will supply env vars (DISCORD_TOKEN, GUILD_ID, etc.)
 CMD ["python", "-m", "bromestriker"]
