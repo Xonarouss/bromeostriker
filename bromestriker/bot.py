@@ -121,6 +121,18 @@ class BromeStriker(commands.Bot):
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (guild={self.guild_id})")
 
+        # Streaming presence (customize via env if you want)
+        twitch_url = (os.getenv("BOT_STREAM_URL", "") or "https://twitch.tv/bromeolive2").strip()
+        status_text = (os.getenv("BOT_STREAM_STATUS", "") or "BromeoFam in de gaten aan het houden 👀").strip()
+        try:
+            await self.change_presence(activity=discord.Streaming(name=status_text, url=twitch_url))
+        except Exception:
+            # fallback: normal playing
+            try:
+                await self.change_presence(activity=discord.Game(name=status_text))
+            except Exception:
+                pass
+
         # ---- Streaming presence (requested) ----
         # Discord "Streaming" activity REQUIRES a URL.
         stream_url = (os.getenv("BOT_STREAM_URL") or "https://twitch.tv/bromeolive").strip()
