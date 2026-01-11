@@ -61,11 +61,6 @@ async def _fetch_number_from_url(session, url: str, json_key: str = "count") -> 
 class Counters(commands.Cog):
     """Auto-updating counter channels (Members + Twitch/Instagram/TikTok)."""
 
-    group = app_commands.Group(
-        name="counter",
-        description="Maak/refresh counter kanalen (members + socials)",
-    )
-
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._task: Optional[asyncio.Task] = None
@@ -104,9 +99,9 @@ class Counters(commands.Cog):
             self._task = None
 
     # -------------------------
-    # /counter (no subcommand) = setup
+    # Slash commands
     # -------------------------
-    @group.callback
+    @app_commands.command(name="counter", description="Maak de counter kanalen aan en zet auto-update aan")
     async def counter(self, interaction: discord.Interaction):
         """Maak de counter kanalen aan en zet auto-update aan."""
         await interaction.response.defer(ephemeral=True)
@@ -117,11 +112,11 @@ class Counters(commands.Cog):
         await self._refresh_guild(interaction.guild)
         await interaction.followup.send(
             "✅ Counters staan aan. Ik update ze automatisch.\n"
-            "Gebruik **/counter refresh** als je direct wil bijwerken.",
+            "Gebruik **/counterrefresh** als je direct wil bijwerken.",
             ephemeral=True,
         )
 
-    @group.command(name="refresh", description="Refresh de counters nu")
+    @app_commands.command(name="counterrefresh", description="Refresh de counters nu")
     async def counter_refresh(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         if not interaction.guild:
