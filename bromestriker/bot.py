@@ -51,8 +51,8 @@ def _parse_csv_names(val: str) -> Set[str]:
     return set([p.strip() for p in (val or "").split(",") if p.strip()])
 
 def _human_duration(seconds: int) -> str:
-    if seconds >= 7*24*60*60:
-        days = seconds // (24*60*60)
+    if seconds >= 7 * 24 * 60 * 60:
+        days = seconds // (24 * 60 * 60)
         return f"{days} dagen"
     hours = max(1, seconds // 3600)
     return f"{hours} uur"
@@ -97,7 +97,6 @@ class BromeStriker(commands.Bot):
         await self.add_cog(SearchDDG(self))
 
         # 2) Register app commands on the tree
-        # (Doing this here guarantees they exist before sync.)
         self.tree.add_command(mute_cmd)
         self.tree.add_command(unmute_cmd)
         self.tree.add_command(strikes_cmd)
@@ -122,8 +121,20 @@ class BromeStriker(commands.Bot):
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (guild={self.guild_id})")
 
+        # ---- Streaming presence (requested) ----
+        # Discord "Streaming" activity REQUIRES a URL.
+        stream_url = (os.getenv("BOT_STREAM_URL") or "https://twitch.tv/bromeolive2").strip()
+        activity = discord.Streaming(
+            name="BromeoFam in de gaten aan het houden 👀",
+            url=stream_url,
+        )
+        try:
+            await self.change_presence(status=discord.Status.online, activity=activity)
+            print(f"✅ Presence set: STREAMING '{activity.name}' ({stream_url})")
+        except Exception as e:
+            print("⚠️ Failed to set presence:", e)
+
     async def _ensure_roles(self, guild: discord.Guild) -> None:
-        # Ensure roles exist; don't change permissions except for muted role default denies send messages.
         def find_role(name: str) -> Optional[discord.Role]:
             return discord.utils.get(guild.roles, name=name)
 
@@ -281,6 +292,7 @@ class BromeStriker(commands.Bot):
             roles_ids = json.loads(roles_json) or []
         except Exception:
             roles_ids = []
+
         keep = set()
         for r in member.roles:
             if r.name in {self.role_muted, self.role_strike_1, self.role_strike_2, self.role_strike_3}:
@@ -292,7 +304,6 @@ class BromeStriker(commands.Bot):
             if role:
                 target_roles.append(role)
 
-        # also keep strike roles currently on user
         for r in member.roles:
             if r.id in keep:
                 role = guild.get_role(r.id)
@@ -547,7 +558,7 @@ async def resetwarns_cmd(interaction: discord.Interaction, user: discord.Member,
     return await interaction.followup.send(f"♻️ Warns van **{user}** zijn gereset naar 0.", ephemeral=True)
 
 @app_commands.command(name="purge", description="Verwijder berichten (optioneel alleen van een gebruiker)")
-@app_commands.describe(aantal="Aantal berichten (1-200)", user="Alleen berichten van deze gebruiker (optioneel)", reden="Reden (optioneel)")
+@app_commands.describe(aantal="Aantal berichten (1-200)", user="Alleen berichten van een gebruiker (optioneel)", reden="Reden (optioneel)")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def purge_cmd(interaction: discord.Interaction, aantal: int, user: Optional[discord.Member] = None, reden: Optional[str] = None):
     assert bot is not None
