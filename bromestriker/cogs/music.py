@@ -54,12 +54,32 @@ def _load_radio_stations() -> Dict[str, str]:
     """
     Stations from env RADIO_STATIONS_JSON:
       {"groovesalad":"https://ice1.somafm.com/groovesalad-128-mp3", ...}
-    If not provided, we ship a small default list (public Icecast).
+
+    Coolify (and some Docker UIs) sometimes store JSON with escaped quotes, e.g.
+      {\"qmusic\":\"https://...\"}
+    We handle both normal JSON and escaped-JSON safely.
+
+    If not provided / invalid, we ship a small default list (public Icecast).
     """
     raw = (os.getenv("RADIO_STATIONS_JSON", "") or "").strip()
     if raw:
-        try:
-            data = json.loads(raw)
+        # 1) If the whole JSON was stored with escaped quotes, unescape it.
+        #    Example: {\"a\":\"b\"}  -> {"a":"b"}
+        if raw.startswith("{\\") or '\\"' in raw:
+            raw = raw.replace('\\"', '"')
+
+        # 2) Some UIs wrap the value in quotes (a JSON string that contains JSON).
+        #    We'll try parsing up to 2 times.
+        for _ in range(2):
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = None
+
+            if isinstance(data, str):
+                raw = data.strip()
+                continue
+
             if isinstance(data, dict):
                 out: Dict[str, str] = {}
                 for k, v in data.items():
@@ -67,14 +87,14 @@ def _load_radio_stations() -> Dict[str, str]:
                         out[k.strip().lower()] = v.strip()
                 if out:
                     return out
-        except Exception:
-            pass
+            break
 
     return {
         "groovesalad": "https://ice1.somafm.com/groovesalad-128-mp3",
         "dronezone": "https://ice1.somafm.com/dronezone-128-mp3",
         "defcon": "https://ice1.somafm.com/defcon-128-mp3",
     }
+
 
 
 @dataclass
