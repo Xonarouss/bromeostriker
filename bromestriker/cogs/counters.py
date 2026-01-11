@@ -278,9 +278,6 @@ class Counters(commands.Cog):
         if client_id and client_secret and broadcaster_id:
             try:
                 import aiohttp
-import logging
-log = logging.getLogger('bromestriker.counters')
-
                 async with aiohttp.ClientSession() as session:
                     token = await self._get_twitch_app_token(session, client_id, client_secret)
                     if not token:
@@ -307,9 +304,6 @@ log = logging.getLogger('bromestriker.counters')
         if url:
             try:
                 import aiohttp
-import logging
-log = logging.getLogger('bromestriker.counters')
-
                 async with aiohttp.ClientSession() as session:
                     return await _fetch_number_from_url(session, url, key)
             except Exception:
