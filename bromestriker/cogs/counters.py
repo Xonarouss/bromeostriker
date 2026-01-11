@@ -111,7 +111,7 @@ class Counters(commands.Cog):
         # Scraping mode (no OAuth / no business verification). If username is set, we scrape public profile pages.
         # Note: scraping can break if platforms change their HTML/JSON, but it's how most counter bots work.
         self.instagram_username = (os.getenv("INSTAGRAM_USERNAME") or "").strip().lstrip("@")
-        self.instagram_sessionid = (os.getenv(\"INSTAGRAM_SESSIONID\") or \"\").strip()
+        self.instagram_sessionid = (os.getenv("INSTAGRAM_SESSIONID") or "").strip()
         self.tiktok_username = (os.getenv("TIKTOK_USERNAME") or "").strip().lstrip("@")
 
 
