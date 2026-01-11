@@ -2,6 +2,8 @@ import os
 import time
 import asyncio
 import aiohttp
+import logging
+log = logging.getLogger('bromestriker.counters')
 import re
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -44,8 +46,9 @@ async def _fetch_number_from_url(session, url: str, json_key: str = "count") -> 
             if "application/json" in text_ct or body.strip().startswith("{"):
                 try:
                     data = await resp.json()
-                except Exception:
-                    return None
+                except Exception as e:
+                    log.exception('Failed to create counter channel %s', kind)
+                    raise
                 val = data.get(json_key)
                 if isinstance(val, (int, float)):
                     return int(val)
@@ -129,9 +132,16 @@ class Counters(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         if not interaction.guild:
             return await interaction.followup.send("Dit werkt alleen in een server.", ephemeral=True)
-        await self._ensure_setup(interaction.guild)
-        await self._refresh_guild(interaction.guild)
-        await interaction.followup.send("✅ Counters refreshed.", ephemeral=True)
+
+        try:
+            await self._ensure_setup(interaction.guild)
+            await self._refresh_guild(interaction.guild)
+        except Exception as e:
+            log.exception("Counter refresh failed")
+            return await interaction.followup.send(f"❌ Counter refresh faalde: `{type(e).__name__}: {e}`", ephemeral=True)
+
+        await interaction.followup.send("✅ Counters bijgewerkt.", ephemeral=True)
+
 
     # -------------------------
     # internals
@@ -176,8 +186,9 @@ class Counters(commands.Cog):
                         overwrites=overwrites,
                         reason="Counters: channel aanmaken",
                     )
-                except Exception:
-                    return None
+                except Exception as e:
+                    log.exception('Failed to create counter channel %s', kind)
+                    raise
                 # ensure not joinable
                 try:
                     ow = ch.overwrites_for(guild.default_role)
@@ -249,8 +260,8 @@ class Counters(commands.Cog):
         try:
             if ch.name != new_name:
                 await ch.edit(name=new_name, reason="Counters: update")
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug('Rename failed for %s: %s', getattr(ch,'id',None), e)
 
     # ---------- Twitch ----------
     async def _get_twitch_followers(self) -> Optional[int]:
@@ -267,6 +278,8 @@ class Counters(commands.Cog):
         if client_id and client_secret and broadcaster_id:
             try:
                 import aiohttp
+import logging
+log = logging.getLogger('bromestriker.counters')
 
                 async with aiohttp.ClientSession() as session:
                     token = await self._get_twitch_app_token(session, client_id, client_secret)
@@ -294,6 +307,8 @@ class Counters(commands.Cog):
         if url:
             try:
                 import aiohttp
+import logging
+log = logging.getLogger('bromestriker.counters')
 
                 async with aiohttp.ClientSession() as session:
                     return await _fetch_number_from_url(session, url, key)
@@ -431,7 +446,8 @@ async def _get_tiktok_followers(self) -> Optional[int]:
                 val = user.get("follower_count")
                 try:
                     return int(val)
-                except Exception:
-                    return None
+                except Exception as e:
+                    log.exception('Failed to create counter channel %s', kind)
+                    raise
     except Exception:
         return None
