@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..webserver import refresh_tiktok_access_token_if_needed
 
 def _fmt_nl(n: Optional[int]) -> str:
     if n is None:
@@ -338,21 +339,25 @@ class Counters(commands.Cog):
             return None
 
     async def _get_tiktok_followers(self) -> Optional[int]:
-        # Official: TikTok API v2 Get User Info (follower_count).
-        if not self.tiktok_access_token:
-            return None
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = "https://open.tiktokapis.com/v2/user/info/"
-                params = {"fields": "follower_count"}
-                headers = {"Authorization": f"Bearer {self.tiktok_access_token}"}
-                async with session.get(url, params=params, headers=headers, timeout=15) as resp:
-                    if resp.status >= 400:
-                        return None
-                    data = await resp.json()
-                    # expected shape: { data: { user: { follower_count: ... }}}
-                    user = (data.get("data") or {}).get("user") or {}
-                    val = user.get("follower_count")
-                    return int(val) if isinstance(val, (int, float, str)) and str(val).isdigit() else None
-        except Exception:
-            return None
+    # Official: TikTok API v2 Get User Info (follower_count).
+    token = await refresh_tiktok_access_token_if_needed()
+    if not token:
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = "https://open.tiktokapis.com/v2/user/info/"
+            params = {"fields": "follower_count"}
+            headers = {"Authorization": f"Bearer {token}"}
+            async with session.get(url, params=params, headers=headers, timeout=15) as resp:
+                if resp.status >= 400:
+                    return None
+                data = await resp.json()
+                user = (data.get("data") or {}).get("user") or {}
+                val = user.get("follower_count")
+                # follower_count can be int; be defensive
+                try:
+                    return int(val)
+                except Exception:
+                    return None
+    except Exception:
+        return None
