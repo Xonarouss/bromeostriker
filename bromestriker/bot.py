@@ -11,6 +11,9 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from .db import DB
+from .cogs.music import Music
+from .cogs.weather import Weather
+from .cogs.search_ddg import SearchDDG
 
 STRIKE1_DURATION = 24 * 60 * 60
 STRIKE2_DURATION = 7 * 24 * 60 * 60
@@ -58,6 +61,7 @@ class BromeStriker(commands.Bot):
     def __init__(self, *, guild_id: int, db_path: str, modlog_channel_id: Optional[int] = None):
         intents = discord.Intents.default()
         intents.members = True  # needed for role ops
+        intents.voice_states = True  # needed for muziek (voice)
         super().__init__(command_prefix="!", intents=intents)
 
         self.guild_id = guild_id
@@ -671,6 +675,10 @@ def main() -> None:
 
     db_path = os.path.join(os.getcwd(), "data", "bromestriker.db")
     bot = BromeStriker(guild_id=guild_id, db_path=db_path, modlog_channel_id=modlog_id)
+    # extra features (muziek / weer / zoeken)
+    bot.add_cog(Music(bot))
+    bot.add_cog(Weather(bot))
+    bot.add_cog(SearchDDG(bot))
 
     # register commands on the tree
     bot.tree.add_command(mute_cmd)

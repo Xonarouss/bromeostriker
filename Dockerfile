@@ -1,13 +1,14 @@
-FROM python:3.13-slim
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-COPY bromestriker /app/bromestriker
-COPY README.md /app/README.md
+COPY . /app
 
-# data volume
-RUN mkdir -p /app/data
-
+# Coolify / Docker will supply env vars (DISCORD_TOKEN, GUILD_ID, etc.)
 CMD ["python", "-m", "bromestriker"]
