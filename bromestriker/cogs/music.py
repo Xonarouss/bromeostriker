@@ -240,7 +240,7 @@ class Music(commands.Cog):
 
     def _embed(self, title: str, desc: str) -> discord.Embed:
         e = discord.Embed(title=title, description=desc, colour=BRAND_GREEN)
-        e.set_footer(text="XonarousLIVE • Music")
+        e.set_footer(text="BromeoLIVE• Muziekspeler")
         return e
 
     async def _start_player_task(self, guild: discord.Guild, text_channel: discord.abc.Messageable):
