@@ -83,11 +83,40 @@ class BromeStriker(commands.Bot):
         self.role_strike_3 = "Strike 3"
         self.role_muted = "Gedempt"
 
+        # background task holder
+        self.mute_watcher_task: Optional[asyncio.Task] = None
+
     async def setup_hook(self) -> None:
+        """
+        setup_hook runs before on_ready.
+        IMPORTANT: load cogs + add commands BEFORE syncing, otherwise slash commands won't appear.
+        """
+        # 1) Load cogs (async!)
+        await self.add_cog(Music(self))
+        await self.add_cog(Weather(self))
+        await self.add_cog(SearchDDG(self))
+
+        # 2) Register app commands on the tree
+        # (Doing this here guarantees they exist before sync.)
+        self.tree.add_command(mute_cmd)
+        self.tree.add_command(unmute_cmd)
+        self.tree.add_command(strikes_cmd)
+        self.tree.add_command(reset_strikes_cmd)
+        self.tree.add_command(warn_cmd)
+        self.tree.add_command(warns_cmd)
+        self.tree.add_command(removewarn_cmd)
+        self.tree.add_command(resetwarns_cmd)
+        self.tree.add_command(purge_cmd)
+        self.tree.add_command(kick_cmd)
+        self.tree.add_command(ban_cmd)
+
+        # 3) Sync commands (guild sync = instant)
         guild = discord.Object(id=self.guild_id)
-        # Register global commands to this guild for instant availability
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
+        print(f"✅ Slash commands synced to guild={self.guild_id}")
+
+        # 4) Start background task
         self.mute_watcher_task = asyncio.create_task(self._mute_watcher_loop())
 
     async def on_ready(self) -> None:
@@ -113,10 +142,7 @@ class BromeStriker(commands.Bot):
         if not muted:
             muted = await guild.create_role(name=self.role_muted, reason="BromeStriker: gedempt rol aanmaken")
 
-        # Set muted role permissions minimal: no send messages. View permissions managed via overwrites.
-        # Role permissions are global; channel overwrites are safer.
-        # We'll just keep role perms default and rely on channel overwrites for send messages.
-        # But we can apply overwrite to all text channels to block sending.
+        # Apply overwrite to block sending in channels where we can
         for ch in guild.channels:
             if isinstance(ch, (discord.TextChannel, discord.Thread, discord.ForumChannel)):
                 try:
@@ -131,7 +157,6 @@ class BromeStriker(commands.Bot):
                     if changed:
                         await ch.set_permissions(muted, overwrite=ow, reason="BromeStriker: gedempt mag niet praten")
                 except Exception:
-                    # ignore channels we cannot edit
                     continue
 
         # Hide specific categories for muted role
@@ -152,7 +177,6 @@ class BromeStriker(commands.Bot):
             return True
         if role.name in self.preserve_role_names:
             return True
-        # Always preserve strike + muted roles (by ID when possible)
         if role.id in PROTECTED_ROLE_IDS:
             return True
         if role.name in {self.role_strike_1, self.role_strike_2, self.role_strike_3, self.role_muted}:
@@ -215,7 +239,6 @@ class BromeStriker(commands.Bot):
     async def _call_twitch_webhook(self, guild: discord.Guild, user: discord.Member, reason: str) -> None:
         if not self.twitch_webhook:
             return
-        # simple fire-and-forget HTTP call using aiohttp (already dependency of discord.py)
         try:
             import aiohttp
             async with aiohttp.ClientSession() as sess:
@@ -303,39 +326,29 @@ async def mute_cmd(interaction: discord.Interaction, user: discord.Member, reden
     guild = interaction.guild
     await bot._ensure_roles(guild)
 
-    # Dedupe: if same interaction id already processed, ignore
     inter_id = str(interaction.id)
     if bot.db.seen_interaction(inter_id):
         return await interaction.followup.send("⚠️ Dit commando is al verwerkt.", ephemeral=True)
     bot.db.mark_interaction(inter_id)
     bot.db.prune_interactions()
 
-    # permissions check
     me = guild.me
     if me is None:
         return await interaction.followup.send("Ik kan mezelf niet vinden in deze server.", ephemeral=True)
 
-    # Can't act on admins above bot
     if user.top_role >= me.top_role and user != guild.owner:
         return await interaction.followup.send("❌ Ik kan deze gebruiker niet modereren (rol staat hoger of gelijk aan mij).", ephemeral=True)
 
-    # increment strike
     strike = bot.db.increment_strikes(guild.id, user.id)
 
-    # roles
-    # Prefer the fixed IDs (so we never miss them due to cache/name mismatches)
     muted_role = guild.get_role(MUTED_ROLE_ID) or discord.utils.get(guild.roles, name=bot.role_muted)
     s1 = guild.get_role(STRIKE1_ROLE_ID) or discord.utils.get(guild.roles, name=bot.role_strike_1)
     s2 = guild.get_role(STRIKE2_ROLE_ID) or discord.utils.get(guild.roles, name=bot.role_strike_2)
     s3 = guild.get_role(STRIKE3_ROLE_ID) or discord.utils.get(guild.roles, name=bot.role_strike_3)
 
-    # ensure roles exist
     if not muted_role or not s1 or not s2 or not s3:
         return await interaction.followup.send("❌ Rollen ontbreken (Strike 1/2/3 of Gedempt).", ephemeral=True)
 
-    # apply strike roles (remove others)
-    # Apply strike roles. IMPORTANT: we later do member.edit(roles=...), so we must
-    # ensure the active strike role is explicitly included there too (discord cache can lag).
     active_strike_role: Optional[discord.Role] = None
     try:
         if strike == 1:
@@ -348,16 +361,13 @@ async def mute_cmd(interaction: discord.Interaction, user: discord.Member, reden
             active_strike_role = s3
             await user.add_roles(s3, reason="BromeStriker: strike 3")
 
-        # keep strike roles tidy (remove lower strikes)
         if strike >= 2 and s1 and s1 in user.roles:
             await user.remove_roles(s1, reason="BromeStriker: upgrade strike")
         if strike >= 3 and s2 and s2 in user.roles:
             await user.remove_roles(s2, reason="BromeStriker: upgrade strike")
     except Exception:
-        # even if adding fails, we continue (the later member.edit may still work)
         pass
 
-    # Strike 3: ban + clear DB
     if strike >= 3:
         await bot._dm_strike_embed(user, 3, "Permanente ban", reden or "", interaction.user, guild)
         await bot._call_twitch_webhook(guild, user, reden or "")
@@ -365,30 +375,26 @@ async def mute_cmd(interaction: discord.Interaction, user: discord.Member, reden
             await guild.ban(user, reason=f"Strike 3 - {reden or 'geen reden'}", delete_message_seconds=0)
         except Exception as e:
             return await interaction.followup.send(f"❌ Ban mislukt: {e}", ephemeral=True)
-        # Clear strikes + mute rows
+
         bot.db.delete_strikes(guild.id, user.id)
         bot.db.clear_mute(guild.id, user.id)
-        # modlog
+
         emb = discord.Embed(title="⛔ Strike 3 — Ban", description=f"**{user}** is verbannen.", timestamp=discord.utils.utcnow())
         emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
         emb.add_field(name="Moderator", value=str(interaction.user), inline=False)
         await bot._send_modlog(guild, emb)
         return await interaction.followup.send(f"⛔ **{user}** heeft **Strike 3** gekregen en is **permanent verbannen**.", ephemeral=True)
 
-    # For strike 1/2: mute with durations
     duration = STRIKE1_DURATION if strike == 1 else STRIKE2_DURATION
     label = "24 uur" if strike == 1 else "7 dagen"
     unmute_at = int(time.time()) + duration
 
-    # Save current roles to restore, but preserve baseline roles
     current_roles = [r.id for r in user.roles if not bot._is_preserved_role(r, guild)]
     roles_json = json.dumps(current_roles)
     bot.db.upsert_mute(guild.id, user.id, roles_json, unmute_at)
 
-    # Strip non-preserved roles (keep @everyone, preserved, strike roles)
     target_roles = [r for r in user.roles if bot._is_preserved_role(r, guild)]
 
-    # FORCE include the active strike role so it doesn't get dropped by member.edit(...)
     if active_strike_role and active_strike_role not in target_roles:
         target_roles.append(active_strike_role)
     if muted_role not in target_roles:
@@ -399,10 +405,8 @@ async def mute_cmd(interaction: discord.Interaction, user: discord.Member, reden
     except Exception as e:
         return await interaction.followup.send(f"❌ Rollen aanpassen mislukt: {e}", ephemeral=True)
 
-    # DM embed
     await bot._dm_strike_embed(user, strike, f"Mute: {label}", reden or "", interaction.user, guild)
 
-    # modlog
     emb = discord.Embed(title=f"🔇 Strike {strike} — Mute", description=f"**{user}** is gedempt.", timestamp=discord.utils.utcnow())
     emb.add_field(name="Duur", value=label, inline=True)
     emb.add_field(name="Reden", value=reden or "(geen)", inline=False)
@@ -421,8 +425,6 @@ async def unmute_cmd(interaction: discord.Interaction, user: discord.Member, red
     guild = interaction.guild
     await bot._ensure_roles(guild)
 
-    row = None
-    # fetch mute row if exists
     cur = bot.db.conn.cursor()
     cur.execute("SELECT roles_json FROM mutes WHERE guild_id=? AND user_id=?", (guild.id, user.id))
     row = cur.fetchone()
@@ -438,7 +440,6 @@ async def strikes_cmd(interaction: discord.Interaction, user: discord.Member):
     if not interaction.guild:
         return await interaction.response.send_message("Alleen in een server.", ephemeral=True)
     s = bot.db.get_strikes(interaction.guild.id, user.id)
-    # PUBLIC message
     return await interaction.response.send_message(f"📌 **{user}** heeft **{s}** strike(s).", ephemeral=False)
 
 @app_commands.command(name="resetstrikes", description="Reset strikes van een gebruiker")
@@ -451,7 +452,6 @@ async def reset_strikes_cmd(interaction: discord.Interaction, user: discord.Memb
     guild = interaction.guild
     bot.db.delete_strikes(guild.id, user.id)
 
-    # remove strike roles if present
     s1 = discord.utils.get(guild.roles, name=bot.role_strike_1)
     s2 = discord.utils.get(guild.roles, name=bot.role_strike_2)
     s3 = discord.utils.get(guild.roles, name=bot.role_strike_3)
@@ -462,7 +462,6 @@ async def reset_strikes_cmd(interaction: discord.Interaction, user: discord.Memb
     except Exception:
         pass
     return await interaction.followup.send(f"♻️ Strikes van **{user}** zijn gereset naar 0.", ephemeral=True)
-
 
 # -------------------------
 # Extra standaard moderation commands
@@ -488,7 +487,6 @@ async def warn_cmd(interaction: discord.Interaction, user: discord.Member, reden
 
     return await interaction.followup.send(f"⚠️ **{user}** is gewaarschuwd. (totaal warns: {warn_count})", ephemeral=True)
 
-
 @app_commands.command(name="warns", description="Bekijk het aantal waarschuwingen van een gebruiker")
 @app_commands.describe(user="Gebruiker")
 @app_commands.checks.has_permissions(moderate_members=True)
@@ -505,7 +503,6 @@ async def warns_cmd(interaction: discord.Interaction, user: discord.Member):
     await bot._send_modlog(guild, discord.Embed(title="📋 Warns bekeken", description=f"{interaction.user} bekeek warns van **{user}** (totaal: {w}).", timestamp=discord.utils.utcnow()))
 
     return await interaction.followup.send(embed=emb, ephemeral=True)
-
 
 @app_commands.command(name="removewarn", description="Verwijder 1 (of meer) waarschuwing(en) van een gebruiker")
 @app_commands.describe(user="Gebruiker", aantal="Hoeveel warns verwijderen (default 1)", reden="Reden (optioneel)")
@@ -530,7 +527,6 @@ async def removewarn_cmd(interaction: discord.Interaction, user: discord.Member,
 
     return await interaction.followup.send(f"➖ Warn(s) verwijderd. **{user}** heeft nu {new_count} warn(s).", ephemeral=True)
 
-
 @app_commands.command(name="resetwarns", description="Reset waarschuwingen van een gebruiker naar 0")
 @app_commands.describe(user="Gebruiker", reden="Reden (optioneel)")
 @app_commands.checks.has_permissions(moderate_members=True)
@@ -549,7 +545,6 @@ async def resetwarns_cmd(interaction: discord.Interaction, user: discord.Member,
     await bot._send_modlog(guild, emb)
 
     return await interaction.followup.send(f"♻️ Warns van **{user}** zijn gereset naar 0.", ephemeral=True)
-
 
 @app_commands.command(name="purge", description="Verwijder berichten (optioneel alleen van een gebruiker)")
 @app_commands.describe(aantal="Aantal berichten (1-200)", user="Alleen berichten van deze gebruiker (optioneel)", reden="Reden (optioneel)")
@@ -587,7 +582,6 @@ async def purge_cmd(interaction: discord.Interaction, aantal: int, user: Optiona
 
     return await interaction.followup.send(f"🧹 Verwijderd: {count} bericht(en).", ephemeral=True)
 
-
 @app_commands.command(name="kick", description="Kick een gebruiker (met DM) en log in het modlog kanaal")
 @app_commands.describe(user="Gebruiker", reden="Reden (optioneel)")
 @app_commands.checks.has_permissions(kick_members=True)
@@ -598,7 +592,6 @@ async def kick_cmd(interaction: discord.Interaction, user: discord.Member, reden
         return await interaction.followup.send("Alleen in een server.", ephemeral=True)
     guild = interaction.guild
 
-    # safety: role hierarchy
     me = guild.me
     if me is None:
         return await interaction.followup.send("Ik kan mezelf niet vinden in deze server.", ephemeral=True)
@@ -619,7 +612,6 @@ async def kick_cmd(interaction: discord.Interaction, user: discord.Member, reden
 
     return await interaction.followup.send(f"👢 **{user}** is gekickt.", ephemeral=True)
 
-
 @app_commands.command(name="ban", description="Ban een gebruiker (eerst DM, dan na 5s ban) en log in modlog")
 @app_commands.describe(user="Gebruiker", reden="Reden (optioneel)", verwijder_berichten="Verwijder berichten van de laatste X dagen (0-7)")
 @app_commands.checks.has_permissions(ban_members=True)
@@ -635,7 +627,6 @@ async def ban_cmd(
         return await interaction.followup.send("Alleen in een server.", ephemeral=True)
     guild = interaction.guild
 
-    # safety: role hierarchy
     me = guild.me
     if me is None:
         return await interaction.followup.send("Ik kan mezelf niet vinden in deze server.", ephemeral=True)
@@ -675,22 +666,4 @@ def main() -> None:
 
     db_path = os.path.join(os.getcwd(), "data", "bromestriker.db")
     bot = BromeStriker(guild_id=guild_id, db_path=db_path, modlog_channel_id=modlog_id)
-    # extra features (muziek / weer / zoeken)
-    bot.add_cog(Music(bot))
-    bot.add_cog(Weather(bot))
-    bot.add_cog(SearchDDG(bot))
-
-    # register commands on the tree
-    bot.tree.add_command(mute_cmd)
-    bot.tree.add_command(unmute_cmd)
-    bot.tree.add_command(strikes_cmd)
-    bot.tree.add_command(reset_strikes_cmd)
-    bot.tree.add_command(warn_cmd)
-    bot.tree.add_command(warns_cmd)
-    bot.tree.add_command(removewarn_cmd)
-    bot.tree.add_command(resetwarns_cmd)
-    bot.tree.add_command(purge_cmd)
-    bot.tree.add_command(kick_cmd)
-    bot.tree.add_command(ban_cmd)
-
     bot.run(token)
