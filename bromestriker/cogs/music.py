@@ -377,11 +377,10 @@ class Music(commands.Cog):
             opts = dict(BASE_YTDL_OPTS)
 
             cookiefile = (
-    os.getenv("YTDLP_COOKIES")
-    or os.getenv("YTDLP_COOKIES_PATH")
-    or "/app/data/cookies.txt"
-)
-)
+                os.getenv("YTDLP_COOKIES")
+                or os.getenv("YTDLP_COOKIES_PATH")
+                or "/app/data/cookies.txt"
+            )
             if cookiefile:
                 opts["cookiefile"] = cookiefile
 
