@@ -21,6 +21,25 @@ def _fmt_nl(n: Optional[int]) -> str:
     return f"{int(n):,}".replace(",", ".")
 
 
+def _fmt_social(n: Optional[int]) -> str:
+    """Format social counters.
+
+    - < 10.000: exact with NL thousands separator (.)
+    - >= 10.000: compact 'K' with 1 decimal, **floored** (never rounds up)
+      so 13389 -> 13.3K (not 13.4K)
+    """
+    if n is None:
+        return "—"
+    n = int(n)
+    if n >= 10_000:
+        # floor to 1 decimal in thousands
+        k10 = n // 100  # 13389 -> 133 (== 13.3K)
+        whole = k10 // 10
+        dec = k10 % 10
+        return f"{whole}.{dec}K"
+    return f"{n:,}".replace(",", ".")
+
+
 def _clamp_channel_name(name: str) -> str:
     # Discord channel name limit is 100 chars.
     name = (name or "").strip()
@@ -46,9 +65,9 @@ async def _fetch_number_from_url(session, url: str, json_key: str = "count") -> 
             if "application/json" in text_ct or body.strip().startswith("{"):
                 try:
                     data = await resp.json()
-                except Exception as e:
-                    log.exception('Failed to create counter channel %s', kind)
-                    raise
+                except Exception:
+                    # invalid json
+                    return None
                 val = data.get(json_key)
                 if isinstance(val, (int, float)):
                     return int(val)
@@ -156,13 +175,22 @@ class Counters(commands.Cog):
                         return None
                     html = await resp.text()
 
+            # If we got a login / challenge page, patterns won't exist.
+            if "login" in html.lower() and "instagram" in html.lower() and "password" in html.lower():
+                log.warning("Instagram scrape: login wall detected")
+                return None
+
             # Common embedded JSON key (legacy)
-            m = re.search(r'"edge_followed_by":\{"count":(\d+)\}', html)
+            m = re.search(r'"edge_followed_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html)
             if m:
                 return int(m.group(1))
 
-            # Newer keys sometimes contain followers_count
+            # Newer keys sometimes contain followers_count / follower_count
             m = re.search(r'"followers_count"\s*:\s*(\d+)', html)
+            if m:
+                return int(m.group(1))
+
+            m = re.search(r'"follower_count"\s*:\s*(\d+)', html)
             if m:
                 return int(m.group(1))
 
@@ -171,9 +199,38 @@ class Counters(commands.Cog):
             if m:
                 desc = m.group(1)
                 # Try "X Followers" or Dutch variants
-                m2 = re.search(r'([0-9][0-9\.,]*\s*[KkMm]?)\s*(?:Followers|Volgers)', desc)
+                m2 = re.search(r'([0-9][0-9\.,\s]*\s*[KkMm]?)\s*(?:Followers|Volgers)', desc, re.IGNORECASE)
                 if m2:
                     return self._parse_compact_number(m2.group(1))
+
+            # Last-resort fallback (still scraping): Instagram web_profile_info endpoint.
+            # Many public counters use this because the HTML frequently changes.
+            try:
+                api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={self.instagram_username}"
+                api_headers = dict(headers)
+                # This app id is commonly used by the web client; helps avoid 403.
+                api_headers.update({
+                    "X-IG-App-ID": "936619743392459",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Referer": url,
+                })
+                async with aiohttp.ClientSession(headers=api_headers) as s2:
+                    async with s2.get(api_url, timeout=25, allow_redirects=True) as r2:
+                        if r2.status < 400:
+                            data = await r2.json(content_type=None)
+                            user = (((data or {}).get("data") or {}).get("user") or {})
+                            # try a few known keys
+                            eb = ((user.get("edge_followed_by") or {}).get("count"))
+                            if isinstance(eb, int):
+                                return eb
+                            fc = user.get("followers_count")
+                            if isinstance(fc, int):
+                                return fc
+                            fc2 = user.get("follower_count")
+                            if isinstance(fc2, int):
+                                return fc2
+            except Exception:
+                pass
 
             log.warning("Instagram scrape: pattern not found")
             return None
@@ -395,17 +452,18 @@ class Counters(commands.Cog):
         instagram = await self._get_instagram_followers()
         tiktok = await self._get_tiktok_followers()
 
-        await self._maybe_rename(ch_by_kind.get("members"), self.tpl_members, members)
-        await self._maybe_rename(ch_by_kind.get("twitch"), self.tpl_twitch, twitch)
-        await self._maybe_rename(ch_by_kind.get("instagram"), self.tpl_instagram, instagram)
-        await self._maybe_rename(ch_by_kind.get("tiktok"), self.tpl_tiktok, tiktok)
+        await self._maybe_rename(ch_by_kind.get("members"), self.tpl_members, members, fmt=_fmt_nl)
+        await self._maybe_rename(ch_by_kind.get("twitch"), self.tpl_twitch, twitch, fmt=_fmt_nl)
+        # Social counters: compact K-format at >= 10k
+        await self._maybe_rename(ch_by_kind.get("instagram"), self.tpl_instagram, instagram, fmt=_fmt_social)
+        await self._maybe_rename(ch_by_kind.get("tiktok"), self.tpl_tiktok, tiktok, fmt=_fmt_social)
 
-    async def _maybe_rename(self, ch: Optional[discord.abc.GuildChannel], template: str, count: Optional[int]) -> None:
+    async def _maybe_rename(self, ch: Optional[discord.abc.GuildChannel], template: str, count: Optional[int], fmt=_fmt_nl) -> None:
         if ch is None:
             return
         if not isinstance(ch, (discord.VoiceChannel, discord.TextChannel, discord.StageChannel)):
             return
-        new_name = _clamp_channel_name(template.format(count=_fmt_nl(count)))
+        new_name = _clamp_channel_name(template.format(count=fmt(count)))
         try:
             if ch.name != new_name:
                 await ch.edit(name=new_name, reason="Counters: update")
