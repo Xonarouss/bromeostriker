@@ -339,25 +339,28 @@ class Counters(commands.Cog):
             return None
 
     async def _get_tiktok_followers(self) -> Optional[int]:
-    # Official: TikTok API v2 Get User Info (follower_count).
-    token = await refresh_tiktok_access_token_if_needed()
-    if not token:
-        return None
-    try:
-        async with aiohttp.ClientSession() as session:
-            url = "https://open.tiktokapis.com/v2/user/info/"
-            params = {"fields": "follower_count"}
-            headers = {"Authorization": f"Bearer {token}"}
-            async with session.get(url, params=params, headers=headers, timeout=15) as resp:
-                if resp.status >= 400:
-                    return None
-                data = await resp.json()
-                user = (data.get("data") or {}).get("user") or {}
-                val = user.get("follower_count")
-                # follower_count can be int; be defensive
-                try:
-                    return int(val)
-                except Exception:
-                    return None
-    except Exception:
-        return None
+        """Return TikTok follower count using official TikTok API v2.
+
+        Requires a stored/refreshable OAuth token (handled by the built-in OAuth web flow).
+        """
+        token = await refresh_tiktok_access_token_if_needed()
+        if not token:
+            return None
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = "https://open.tiktokapis.com/v2/user/info/"
+                params = {"fields": "follower_count"}
+                headers = {"Authorization": f"Bearer {token}"}
+                async with session.get(url, params=params, headers=headers, timeout=15) as resp:
+                    if resp.status >= 400:
+                        return None
+                    data = await resp.json()
+                    user = (data.get("data") or {}).get("user") or {}
+                    val = user.get("follower_count")
+                    try:
+                        return int(val)
+                    except Exception:
+                        return None
+        except Exception:
+            return None
