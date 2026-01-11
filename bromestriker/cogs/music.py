@@ -2,7 +2,7 @@ import asyncio
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 import discord
 from discord import app_commands
@@ -12,11 +12,7 @@ import yt_dlp
 
 BRAND_GREEN = discord.Colour.from_rgb(46, 204, 113)
 
-# Optional: path to a browser-exported cookies.txt (Netscape format).
-# Set this as an environment variable (Coolify / Docker env):
-#   YTDLP_COOKIES=/app/data/cookies.txt
-# Note: we intentionally read this at *runtime* (not only import time) so changes
-# can take effect after a restart/redeploy.
+# Base yt-dlp options (safe defaults)
 BASE_YTDL_OPTS = {
     "format": "bestaudio/best",
     "noplaylist": True,
@@ -43,7 +39,7 @@ def find_ffmpeg_exe() -> str:
     if env and os.path.exists(env):
         return env
 
-    # 2) local folder drop-in (./ffmpeg.exe or ./bin/ffmpeg.exe)
+    # 2) local folder drop-in (./ffmpeg or ./bin/ffmpeg)
     for p in ("ffmpeg.exe", "ffmpeg", os.path.join("bin", "ffmpeg.exe"), os.path.join("bin", "ffmpeg")):
         if os.path.exists(p):
             return p
@@ -64,7 +60,7 @@ class Track:
 
 class GuildPlayer:
     def __init__(self):
-        self.queue: asyncio.Wachtrij[Track] = asyncio.Wachtrij()
+        self.queue: asyncio.Queue[Track] = asyncio.Queue()
         self.current: Optional[Track] = None
         self.volume: float = 0.5
         self.loop: bool = False
@@ -73,23 +69,23 @@ class GuildPlayer:
 
 
 class Music(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.players: dict[int, GuildPlayer] = {}
-        self.ffmpeg_path = find_ffmpeg_exe()
-
-    # --------- helpers ----------
     # --------- permissies ----------
     MUSIC_ROLE_ID = 1021765413056565328  # B-FAM
 
+    # --------- slash commands group ----------
+    music = app_commands.Group(name="muziek", description="Muziek-commands (alleen B-FAM / admins).")
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.players: Dict[int, GuildPlayer] = {}
+        self.ffmpeg_path = find_ffmpeg_exe()
+
+    # --------- helpers ----------
     def _is_admin(self, member: discord.Member) -> bool:
-        # admin/owner bypass
         try:
-            if member.guild_permissions.administrator:
-                return True
+            return bool(member.guild_permissions.administrator)
         except Exception:
-            pass
-        return False
+            return False
 
     def _has_music_role(self, member: discord.Member) -> bool:
         return any(r.id == self.MUSIC_ROLE_ID for r in getattr(member, "roles", []))
@@ -101,7 +97,10 @@ class Music(commands.Cog):
             return False
         if self._is_admin(member) or self._has_music_role(member):
             return True
-        await interaction.response.send_message("❌ Je hebt geen toegang tot de muziek-commands. Je moet de **B-FAM** rol hebben.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Je hebt geen toegang tot de muziek-commands. Je moet de **B-FAM** rol hebben.",
+            ephemeral=True,
+        )
         return False
 
     def _get_player(self, guild_id: int) -> GuildPlayer:
@@ -115,6 +114,7 @@ class Music(commands.Cog):
         member = interaction.user
         if not isinstance(member, discord.Member) or not member.voice or not member.voice.channel:
             return None
+
         vc = interaction.guild.voice_client
         if vc and vc.is_connected():
             if vc.channel != member.voice.channel:
@@ -142,7 +142,20 @@ class Music(commands.Cog):
             return False
         if member.guild_permissions.administrator:
             return True
-        return member.voice and member.voice.channel and member.voice.channel.id == vc.channel.id
+        return bool(member.voice and member.voice.channel and member.voice.channel.id == vc.channel.id)
+
+    def _get_cookiefile(self) -> Optional[str]:
+        """
+        Picks the first existing cookies file from env/path candidates.
+        Works out-of-the-box on Coolify if you mount /app/data and put cookies.txt there.
+        """
+        candidates = [
+            (os.getenv("YTDLP_COOKIES_PATH") or "").strip(),
+            (os.getenv("YTDLP_COOKIES") or "").strip(),
+            "/app/data/cookies.txt",
+            "/app/data/youtube_cookies.txt",
+        ]
+        return next((p for p in candidates if p and os.path.exists(p)), None)
 
     async def _ytdl_extract(self, query: str) -> Track:
         loop = asyncio.get_running_loop()
@@ -153,37 +166,28 @@ class Music(commands.Cog):
             use_sc = True
             raw = raw[3:].strip()
 
-        # If the user did not provide a direct URL, force a single-result search.
-        # This avoids edge-cases where yt-dlp returns a semi-flat entry that needs a 2nd extract step.
+        # Direct URL or 1-result search
         if raw.startswith("http://") or raw.startswith("https://"):
             q_run = raw
         else:
             q_run = f"{'scsearch1' if use_sc else 'ytsearch1'}:{raw}"
 
         def run():
-            # Build options per-call so env changes take effect after a restart/redeploy
             opts = dict(BASE_YTDL_OPTS)
 
-            cookiefile = os.getenv("YTDLP_COOKIES")
+            # --- Cookies (FIX) ---
+            cookiefile = self._get_cookiefile()
             if cookiefile:
                 opts["cookiefile"] = cookiefile
 
-            # IMPORTANT: YouTube bot-check mitigations
-            # Force more reliable player clients. This often helps when web requests get bot-checked.
+            # YouTube mitigations (safe, no extra deps)
             opts["extractor_args"] = {
                 "youtube": {
                     "player_client": ["web", "tv"],
                 }
             }
 
-
-            # EJS / JS challenge solver (required for YouTube in newer yt-dlp)
-            # Needs a JS runtime in the container (recommended: Deno) AND either yt-dlp[default] (yt-dlp-ejs)
-            # or remote EJS components enabled.
-            opts["js_runtimes"] = {"deno": {}}
-            opts["remote_components"] = ["ejs:github"]
-
-            # Better format fallback (some contexts expose only certain streams)
+            # Better format fallback
             opts["format"] = "bestaudio/best"
             opts["format_sort"] = ["acodec:opus", "abr", "asr", "ext"]
 
@@ -193,14 +197,14 @@ class Music(commands.Cog):
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(q_run, download=False)
 
-                # Searches return a playlist-like dict with entries
+                # Searches return dict with entries
                 if isinstance(info, dict) and "entries" in info:
                     entries = [e for e in (info.get("entries") or []) if e]
                     if not entries:
-                        raise RuntimeFout("No results.")
+                        raise RuntimeError("No results.")
                     info = entries[0]
 
-                # Some providers can return a URL-type entry that needs a 2nd pass
+                # Some providers return URL-type entry that needs a 2nd pass
                 if isinstance(info, dict) and info.get("_type") in ("url", "url_transparent"):
                     u = info.get("url") or info.get("webpage_url")
                     if u:
@@ -223,7 +227,7 @@ class Music(commands.Cog):
         duration = info.get("duration") if isinstance(info, dict) else None
 
         if not stream_url:
-            raise RuntimeFout("Could not get audio stream.")
+            raise RuntimeError("Could not get audio stream.")
 
         return Track(title=title, url=stream_url, webpage_url=webpage, duration=duration)
 
@@ -248,17 +252,16 @@ class Music(commands.Cog):
 
     async def _player_loop(self, guild: discord.Guild, text_channel: discord.abc.Messageable):
         player = self._get_player(guild.id)
+
         while True:
             try:
                 track: Track = await asyncio.wait_for(player.queue.get(), timeout=180)
-            except asyncio.TimeoutFout:
-                # idle 3 min with no queue activity -> disconnect (only if not playing/paused)
+            except asyncio.TimeoutError:
+                # idle 3 min -> disconnect (only if not playing/paused)
                 vc = guild.voice_client
                 if vc and vc.is_connected() and (not vc.is_playing()) and (not vc.is_paused()):
                     try:
-                        await text_channel.send(
-                            embed=self._embed("👋 Leaving voice", "I left the voice channel due to **3 minutes of inactivity**.")
-                        )
+                        await text_channel.send(embed=self._embed("👋 Leaving voice", "I left due to **3 minutes of inactivity**."))
                     except Exception:
                         pass
                     try:
@@ -268,13 +271,11 @@ class Music(commands.Cog):
                 return
 
             if player.loop and player.current:
-                # if loop is on, re-use current instead of consuming queue
                 track = player.current
 
             player.current = track
             vc = guild.voice_client
             if not vc or not vc.is_connected():
-                # can't play if disconnected
                 continue
 
             source = discord.FFmpegPCMAudio(
@@ -288,7 +289,10 @@ class Music(commands.Cog):
             done = asyncio.Event()
 
             def after(_err):
-                self.bot.loop.call_soon_threadsafe(done.set)
+                try:
+                    self.bot.loop.call_soon_threadsafe(done.set)
+                except Exception:
+                    pass
 
             try:
                 vc.play(audio, after=after)
@@ -307,13 +311,10 @@ class Music(commands.Cog):
 
             await done.wait()
 
-            # If loop is off, advance naturally
             if not player.loop:
                 player.current = None
 
     # --------- slash commands ----------
-    music = app_commands.Group(name="muziek", description="Muziek-commands (alleen B-FAM / admins).")
-
     @music.command(name="speel", description="Play a song/URL (joins your voice channel).")
     @app_commands.describe(query="Search query or URL. Tip: prefix with 'sc:' for SoundCloud search.")
     async def play(self, interaction: discord.Interaction, query: str):
@@ -322,13 +323,11 @@ class Music(commands.Cog):
         if not self._same_vc_or_admin(interaction):
             return await interaction.response.send_message("Join the same voice channel as the bot to control music.", ephemeral=True)
 
-        # Defer immediately to avoid Discord timeouts
         try:
             await interaction.response.defer(ephemeral=True)
         except Exception:
             pass
 
-        # Extract first so we don't join/leave if the source blocks the request
         try:
             track = await self._ytdl_extract(query)
             track.requester_id = interaction.user.id
@@ -337,12 +336,11 @@ class Music(commands.Cog):
             if "Sign in to confirm you" in msg:
                 msg = (
                     "YouTube blocked the request (bot-check). "
-                    "Make sure YTDLP_COOKIES points to a browser-exported cookies.txt file. "
-                    "Then restart/redeploy the bot."
+                    "Check cookies are loaded (see logs line: [music] yt-dlp cookiefile=... exists=True). "
+                    "If exists=True and it still blocks, your cookies may be expired or YouTube flags VPS IP."
                 )
             return await interaction.followup.send(f"Couldn’t load that track. ({msg})", ephemeral=True)
 
-        # Now join voice
         try:
             vc = await self._join(interaction)
         except Exception as e:
@@ -355,7 +353,10 @@ class Music(commands.Cog):
         await player.queue.put(track)
         await self._start_player_task(interaction.guild, interaction.channel)
 
-        await interaction.followup.send(embed=self._embed("✅ Toegevoegd aan wachtrij", f"[{track.title}]({track.webpage_url})"), ephemeral=True)
+        await interaction.followup.send(
+            embed=self._embed("✅ Toegevoegd aan wachtrij", f"[{track.title}]({track.webpage_url})"),
+            ephemeral=True,
+        )
 
     @music.command(name="pauze", description="Pauzeer afspelen.")
     async def pause(self, interaction: discord.Interaction):
@@ -363,9 +364,11 @@ class Music(commands.Cog):
             return
         if not self._same_vc_or_admin(interaction):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
+
         vc = interaction.guild.voice_client if interaction.guild else None
         if not vc or not vc.is_playing():
             return await interaction.response.send_message("Er speelt nu niks.", ephemeral=True)
+
         vc.pause()
         await interaction.response.send_message("⏸️ Gepauzeerd.", ephemeral=True)
 
@@ -375,9 +378,11 @@ class Music(commands.Cog):
             return
         if not self._same_vc_or_admin(interaction):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
+
         vc = interaction.guild.voice_client if interaction.guild else None
         if not vc or not vc.is_paused():
             return await interaction.response.send_message("Nothing is paused.", ephemeral=True)
+
         vc.resume()
         await interaction.response.send_message("▶️ Hervat.", ephemeral=True)
 
@@ -387,9 +392,11 @@ class Music(commands.Cog):
             return
         if not self._same_vc_or_admin(interaction):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
+
         vc = interaction.guild.voice_client if interaction.guild else None
         if not vc or not vc.is_playing():
             return await interaction.response.send_message("Er speelt nu niks.", ephemeral=True)
+
         vc.stop()
         await interaction.response.send_message("⏭️ Overgeslagen.", ephemeral=True)
 
@@ -401,32 +408,40 @@ class Music(commands.Cog):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
 
         player = self._get_player(interaction.guild.id)
+
         # Drain queue
         try:
             while True:
                 player.queue.get_nowait()
-        except asyncio.WachtrijEmpty:
+        except asyncio.QueueEmpty:
             pass
+
         player.current = None
         vc = interaction.guild.voice_client if interaction.guild else None
         if vc:
             vc.stop()
+
         await interaction.response.send_message("⏹️ Stopped and cleared queue.", ephemeral=True)
 
     @music.command(name="wachtrij", description="Show the queue.")
     async def queue_cmd(self, interaction: discord.Interaction):
         if not await self._ensure_bfam(interaction):
             return
+
         player = self._get_player(interaction.guild.id)
-        items: List[Track] = list(player.queue._queue)  # ok for display
+        # NOTE: accessing _queue is fine for display/debug
+        items: List[Track] = list(player.queue._queue)
+
         if not player.current and not items:
             return await interaction.response.send_message("Wachtrij is empty.", ephemeral=True)
 
-        lines = []
+        lines: List[str] = []
         if player.current:
             lines.append(f"**Now:** [{player.current.title}]({player.current.webpage_url})")
+
         for i, t in enumerate(items[:10], start=1):
             lines.append(f"{i}. [{t.title}]({t.webpage_url})")
+
         if len(items) > 10:
             lines.append(f"…and {len(items)-10} more")
 
@@ -436,9 +451,11 @@ class Music(commands.Cog):
     async def nowplaying(self, interaction: discord.Interaction):
         if not await self._ensure_bfam(interaction):
             return
+
         player = self._get_player(interaction.guild.id)
         if not player.current:
             return await interaction.response.send_message("Er speelt nu niks.", ephemeral=True)
+
         t = player.current
         await interaction.response.send_message(
             embed=self._embed("🎶 Nu aan het afspelen", f"[{t.title}]({t.webpage_url})  •  `{self._format_duration(t.duration)}`"),
@@ -449,6 +466,7 @@ class Music(commands.Cog):
     async def volume(self, interaction: discord.Interaction, percent: app_commands.Range[int, 0, 100]):
         if not await self._ensure_bfam(interaction):
             return
+
         player = self._get_player(interaction.guild.id)
         player.volume = max(0.0, min(1.0, percent / 100.0))
         await interaction.response.send_message(f"🔊 Volume ingesteld op {percent}%.", ephemeral=True)
@@ -457,6 +475,7 @@ class Music(commands.Cog):
     async def loop(self, interaction: discord.Interaction, enabled: bool):
         if not await self._ensure_bfam(interaction):
             return
+
         player = self._get_player(interaction.guild.id)
         player.loop = bool(enabled)
         await interaction.response.send_message(f"🔁 Herhalen staat nu {'ON' if player.loop else 'OFF'}.", ephemeral=True)
@@ -467,9 +486,11 @@ class Music(commands.Cog):
             return
         if not self._same_vc_or_admin(interaction):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
+
         vc = interaction.guild.voice_client if interaction.guild else None
         if not vc or not vc.is_connected():
             return await interaction.response.send_message("Ik ben niet verbonden.", ephemeral=True)
+
         await vc.disconnect()
         await interaction.response.send_message("👋 Losgekoppeld.", ephemeral=True)
 
