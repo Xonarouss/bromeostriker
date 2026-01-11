@@ -2,6 +2,7 @@ import os
 import time
 import asyncio
 import aiohttp
+import re
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
@@ -88,6 +89,12 @@ class Counters(commands.Cog):
 
         # TikTok API v2 Get User Info requires a user access token with user.info.stats scope.
         self.tiktok_access_token = (os.getenv("TIKTOK_ACCESS_TOKEN") or "").strip()
+
+        # Scraping mode (no OAuth / no business verification). If username is set, we scrape public profile pages.
+        # Note: scraping can break if platforms change their HTML/JSON, but it's how most counter bots work.
+        self.instagram_username = (os.getenv("INSTAGRAM_USERNAME") or "").strip().lstrip("@")
+        self.tiktok_username = (os.getenv("TIKTOK_USERNAME") or "").strip().lstrip("@")
+
 
     async def cog_load(self) -> None:
         # Start loop only once bot is ready-ish
@@ -320,47 +327,111 @@ class Counters(commands.Cog):
         except Exception:
             return None
 
-    # ---------- Instagram / TikTok ----------
-    async def _get_instagram_followers(self) -> Optional[int]:
-        # Official: Instagram Graph API (IG User followers_count).
-        if not self.ig_user_id or not self.ig_access_token:
-            return None
+    # ---------- Instagram / TikTok -----
+
+# ---------- Instagram / TikTok ----------
+async def _get_instagram_followers(self) -> Optional[int]:
+    """Return Instagram follower count.
+
+    Preference order:
+    1) If INSTAGRAM_USERNAME is set: scrape public profile page (no OAuth / no Meta Business requirements)
+    2) Else: if IG_USER_ID + IG_ACCESS_TOKEN are set: Instagram Graph API (official)
+    """
+    # 1) Scrape
+    if self.instagram_username:
+        url = f"https://www.instagram.com/{self.instagram_username}/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"https://graph.facebook.com/{self.ig_graph_version}/{self.ig_user_id}"
-                params = {"fields": "followers_count", "access_token": self.ig_access_token}
-                async with session.get(url, params=params, timeout=15) as resp:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url, timeout=20) as resp:
                     if resp.status >= 400:
                         return None
-                    data = await resp.json()
-                    val = data.get("followers_count")
-                    return int(val) if isinstance(val, (int, float, str)) and str(val).isdigit() else None
+                    html = await resp.text()
+
+            for rgx in [
+                r'"edge_followed_by"\s*:\s*\{"count"\s*:\s*(\d+)\}',
+                r'"followers_count"\s*:\s*(\d+)',
+                r'"follower_count"\s*:\s*(\d+)',
+                r'"followerCount"\s*:\s*(\d+)',
+            ]:
+                mm = re.search(rgx, html)
+                if mm:
+                    return int(mm.group(1))
+
+            mm = re.search(r'"userInteractionCount"\s*:\s*"?(\d+)"?', html)
+            if mm:
+                return int(mm.group(1))
         except Exception:
             return None
 
-    async def _get_tiktok_followers(self) -> Optional[int]:
-        """Return TikTok follower count using official TikTok API v2.
+    # 2) Official Graph API
+    if not self.ig_user_id or not self.ig_access_token:
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://graph.facebook.com/{self.ig_graph_version}/{self.ig_user_id}"
+            params = {"fields": "followers_count", "access_token": self.ig_access_token}
+            async with session.get(url, params=params, timeout=15) as resp:
+                if resp.status >= 400:
+                    return None
+                data = await resp.json()
+                return int(data.get("followers_count")) if data.get("followers_count") is not None else None
+    except Exception:
+        return None
 
-        Requires a stored/refreshable OAuth token (handled by the built-in OAuth web flow).
-        """
-        token = await refresh_tiktok_access_token_if_needed()
-        if not token:
-            return None
+async def _get_tiktok_followers(self) -> Optional[int]:
+    """Return TikTok follower count.
 
+    Preference order:
+    1) If TIKTOK_USERNAME is set: scrape public profile page (no OAuth / no verification)
+    2) Else: official TikTok API v2 (requires OAuth token)
+    """
+    # 1) Scrape
+    if self.tiktok_username:
+        url = f"https://www.tiktok.com/@{self.tiktok_username}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
         try:
-            async with aiohttp.ClientSession() as session:
-                url = "https://open.tiktokapis.com/v2/user/info/"
-                params = {"fields": "follower_count"}
-                headers = {"Authorization": f"Bearer {token}"}
-                async with session.get(url, params=params, headers=headers, timeout=15) as resp:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url, timeout=20) as resp:
                     if resp.status >= 400:
                         return None
-                    data = await resp.json()
-                    user = (data.get("data") or {}).get("user") or {}
-                    val = user.get("follower_count")
-                    try:
-                        return int(val)
-                    except Exception:
-                        return None
+                    html = await resp.text()
+
+            for rgx in [
+                r'"followerCount"\s*:\s*(\d+)',
+                r'"follower_count"\s*:\s*(\d+)',
+            ]:
+                mm = re.search(rgx, html)
+                if mm:
+                    return int(mm.group(1))
         except Exception:
             return None
+
+    # 2) Official API
+    token = await refresh_tiktok_access_token_if_needed()
+    if not token:
+        return None
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = "https://open.tiktokapis.com/v2/user/info/"
+            params = {"fields": "follower_count"}
+            headers = {"Authorization": f"Bearer {token}"}
+            async with session.get(url, params=params, headers=headers, timeout=15) as resp:
+                if resp.status >= 400:
+                    return None
+                data = await resp.json()
+                user = (data.get("data") or {}).get("user") or {}
+                val = user.get("follower_count")
+                try:
+                    return int(val)
+                except Exception:
+                    return None
+    except Exception:
+        return None
