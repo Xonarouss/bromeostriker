@@ -169,89 +169,99 @@ class Counters(commands.Cog):
         }
 
         try:
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(url, timeout=25, allow_redirects=True) as resp:
-                    if resp.status >= 400:
-                        log.warning("Instagram scrape HTTP %s", resp.status)
-                        return None
-                    html = await resp.text()
-
-            # If we got a login / challenge page, patterns won't exist.
-login_wall = ("accounts/login" in html.lower()) or ("challenge" in html.lower()) or (
-    "login" in html.lower() and "password" in html.lower()
-)
-if login_wall:
-    log.warning("Instagram scrape: login wall detected on profile HTML; trying JSON fallbacks")
-            # 1) Try __a=1 JSON endpoint (often works without auth with the right headers)
+            # 1) Fetch profile HTML
             try:
-                a1_url = f"https://www.instagram.com/{self.instagram_username}/?__a=1&__d=dis"
-                a1_headers = dict(headers)
-                a1_headers.update({
-                    "Accept": "application/json,text/plain,*/*",
-                    "X-IG-App-ID": "936619743392459",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": url,
-                })
-                async with aiohttp.ClientSession(headers=a1_headers) as a1s:
-                    async with a1s.get(a1_url, timeout=aiohttp.ClientTimeout(total=20)) as r:
-                        if r.status < 400:
-                            j = await r.json(content_type=None)
-                            # Different shapes over time; try common paths
-                            user = None
-                            if isinstance(j, dict):
-                                user = (
-                                    (j.get("graphql") or {}).get("user")
-                                    or (j.get("data") or {}).get("user")
-                                    or j.get("user")
-                                )
-                            if isinstance(user, dict):
-                                fc = None
-                                eb = (user.get("edge_followed_by") or {}).get("count")
-                                if isinstance(eb, int):
-                                    fc = eb
-                                if fc is None and isinstance(user.get("followers_count"), int):
-                                    fc = user.get("followers_count")
-                                if fc is None and isinstance(user.get("follower_count"), int):
-                                    fc = user.get("follower_count")
-                                if isinstance(fc, int):
-                                    return fc
-            except Exception:
-                pass
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    async with session.get(url, timeout=25, allow_redirects=True) as resp:
+                        if resp.status >= 400:
+                            log.warning("Instagram scrape HTTP %s", resp.status)
+                            return None
+                        html = await resp.text()
+            except Exception as e:
+                log.exception("Instagram scrape failed (HTML fetch): %s", e)
+                return None
 
-            # 2) Try web_profile_info endpoint (no token; may require IG web headers)
-            try:
-                api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={self.instagram_username}"
-                api_headers = dict(headers)
-                api_headers.update({
-                    "Accept": "application/json,text/plain,*/*",
-                    "X-IG-App-ID": "936619743392459",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": url,
-                })
-                # If a sessionid is provided, send it as a cookie to bypass login wall.
-                if self.instagram_sessionid:
-                    api_headers["Cookie"] = f"sessionid={self.instagram_sessionid};"
-                async with aiohttp.ClientSession(headers=api_headers) as apis:
-                    async with apis.get(api_url, timeout=aiohttp.ClientTimeout(total=20)) as r:
-                        if r.status < 400:
-                            j = await r.json(content_type=None)
-                            data = j.get("data") if isinstance(j, dict) else None
-                            user = data.get("user") if isinstance(data, dict) else None
-                            if isinstance(user, dict):
-                                eb = (user.get("edge_followed_by") or {}).get("count")
-                                if isinstance(eb, int):
-                                    return eb
-                                fc = user.get("followers_count")
-                                if isinstance(fc, int):
-                                    return fc
-                                fc2 = user.get("follower_count")
-                                if isinstance(fc2, int):
-                                    return fc2
-            except Exception:
-                pass
+            html_l = html.lower()
 
-            # If all fallbacks fail, return None (still login-walled).
-            return None
+            # Detect login/challenge wall
+            login_wall = ("accounts/login" in html_l) or ("challenge" in html_l) or (
+                ("login" in html_l) and ("password" in html_l)
+            )
+
+            # If login wall -> go straight to JSON fallbacks (HTML patterns usually missing)
+            if login_wall:
+                log.warning("Instagram scrape: login wall detected on profile HTML; trying JSON fallbacks")
+
+                # 1) Try __a=1 JSON endpoint
+                try:
+                    a1_url = f"https://www.instagram.com/{self.instagram_username}/?__a=1&__d=dis"
+                    a1_headers = dict(headers)
+                    a1_headers.update({
+                        "Accept": "application/json,text/plain,*/*",
+                        "X-IG-App-ID": "936619743392459",
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Referer": url,
+                    })
+
+                    async with aiohttp.ClientSession(headers=a1_headers) as a1s:
+                        async with a1s.get(a1_url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                            if r.status < 400:
+                                j = await r.json(content_type=None)
+
+                                user = None
+                                if isinstance(j, dict):
+                                    user = (
+                                        (j.get("graphql") or {}).get("user")
+                                        or (j.get("data") or {}).get("user")
+                                        or j.get("user")
+                                    )
+
+                                if isinstance(user, dict):
+                                    eb = (user.get("edge_followed_by") or {}).get("count")
+                                    if isinstance(eb, int):
+                                        return eb
+                                    if isinstance(user.get("followers_count"), int):
+                                        return user.get("followers_count")
+                                    if isinstance(user.get("follower_count"), int):
+                                        return user.get("follower_count")
+                except Exception:
+                    pass
+
+                # 2) Try web_profile_info endpoint (optionally with sessionid cookie)
+                try:
+                    api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={self.instagram_username}"
+                    api_headers = dict(headers)
+                    api_headers.update({
+                        "Accept": "application/json,text/plain,*/*",
+                        "X-IG-App-ID": "936619743392459",
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Referer": url,
+                    })
+                    if self.instagram_sessionid:
+                        api_headers["Cookie"] = f"sessionid={self.instagram_sessionid};"
+
+                    async with aiohttp.ClientSession(headers=api_headers) as apis:
+                        async with apis.get(api_url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                            if r.status < 400:
+                                j = await r.json(content_type=None)
+                                data = j.get("data") if isinstance(j, dict) else None
+                                user = data.get("user") if isinstance(data, dict) else None
+
+                                if isinstance(user, dict):
+                                    eb = (user.get("edge_followed_by") or {}).get("count")
+                                    if isinstance(eb, int):
+                                        return eb
+                                    if isinstance(user.get("followers_count"), int):
+                                        return user.get("followers_count")
+                                    if isinstance(user.get("follower_count"), int):
+                                        return user.get("follower_count")
+                except Exception:
+                    pass
+
+                # Still login-walled
+                return None
+
+            # ---- Not login-walled: try HTML patterns ----
 
             # Common embedded JSON key (legacy)
             m = re.search(r'"edge_followed_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html)
@@ -271,37 +281,35 @@ if login_wall:
             m = re.search(r'property="og:description"\s+content="([^"]+)"', html)
             if m:
                 desc = m.group(1)
-                # Try "X Followers" or Dutch variants
                 m2 = re.search(r'([0-9][0-9\.,\s]*\s*[KkMm]?)\s*(?:Followers|Volgers)', desc, re.IGNORECASE)
                 if m2:
                     return self._parse_compact_number(m2.group(1))
 
-            # Last-resort fallback (still scraping): Instagram web_profile_info endpoint.
-            # Many public counters use this because the HTML frequently changes.
+            # If HTML patterns fail, try web_profile_info anyway (sometimes HTML changes)
             try:
                 api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={self.instagram_username}"
                 api_headers = dict(headers)
-                # This app id is commonly used by the web client; helps avoid 403.
                 api_headers.update({
+                    "Accept": "application/json,text/plain,*/*",
                     "X-IG-App-ID": "936619743392459",
                     "X-Requested-With": "XMLHttpRequest",
                     "Referer": url,
                 })
+                if self.instagram_sessionid:
+                    api_headers["Cookie"] = f"sessionid={self.instagram_sessionid};"
+
                 async with aiohttp.ClientSession(headers=api_headers) as s2:
                     async with s2.get(api_url, timeout=25, allow_redirects=True) as r2:
                         if r2.status < 400:
                             data = await r2.json(content_type=None)
                             user = (((data or {}).get("data") or {}).get("user") or {})
-                            # try a few known keys
                             eb = ((user.get("edge_followed_by") or {}).get("count"))
                             if isinstance(eb, int):
                                 return eb
-                            fc = user.get("followers_count")
-                            if isinstance(fc, int):
-                                return fc
-                            fc2 = user.get("follower_count")
-                            if isinstance(fc2, int):
-                                return fc2
+                            if isinstance(user.get("followers_count"), int):
+                                return user.get("followers_count")
+                            if isinstance(user.get("follower_count"), int):
+                                return user.get("follower_count")
             except Exception:
                 pass
 
@@ -313,7 +321,6 @@ if login_wall:
             return None
 
 
-    
     async def _get_tiktok_followers(self) -> Optional[int]:
         """TikTok follower count via web scraping (no API)."""
         if not self.tiktok_username:
