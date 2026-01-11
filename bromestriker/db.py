@@ -43,7 +43,25 @@ class DB:
             created_at INTEGER NOT NULL
         );
         """)
+
+        # --- counters ---
+        # Stores the channels used for server counters.
+        # kind values: members, twitch, instagram, tiktok
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS counters (
+            guild_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            channel_id INTEGER NOT NULL,
+            category_id INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, kind)
+        );
+        """)
         self.conn.commit()
+
+        # Best-effort migration: older DBs won't have the counters table.
+        # (SQLite CREATE TABLE IF NOT EXISTS already handles this.)
 
     # --- interaction dedupe ---
     def seen_interaction(self, interaction_id: str) -> bool:
@@ -140,4 +158,31 @@ class DB:
     def due_mutes(self, now_ts: int) -> List[sqlite3.Row]:
         cur = self.conn.cursor()
         cur.execute("SELECT guild_id, user_id, roles_json, unmute_at FROM mutes WHERE unmute_at <= ?", (now_ts,))
+        return cur.fetchall()
+
+    # --- counters ---
+    def upsert_counter(self, guild_id: int, kind: str, channel_id: int, category_id: int | None = None) -> None:
+        now = int(time.time())
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO counters (guild_id, kind, channel_id, category_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, kind) DO UPDATE SET
+              channel_id=excluded.channel_id,
+              category_id=excluded.category_id,
+              updated_at=excluded.updated_at
+            """,
+            (guild_id, kind, channel_id, category_id, now, now),
+        )
+        self.conn.commit()
+
+    def delete_counter(self, guild_id: int, kind: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM counters WHERE guild_id=? AND kind=?", (guild_id, kind))
+        self.conn.commit()
+
+    def get_counters(self, guild_id: int) -> List[sqlite3.Row]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT guild_id, kind, channel_id, category_id, created_at, updated_at FROM counters WHERE guild_id=?", (guild_id,))
         return cur.fetchall()

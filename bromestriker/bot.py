@@ -14,6 +14,7 @@ from .db import DB
 from .cogs.music import Music
 from .cogs.weather import Weather
 from .cogs.search_ddg import SearchDDG
+from .cogs.counters import Counters
 
 STRIKE1_DURATION = 24 * 60 * 60
 STRIKE2_DURATION = 7 * 24 * 60 * 60
@@ -95,6 +96,7 @@ class BromeStriker(commands.Bot):
         await self.add_cog(Music(self))
         await self.add_cog(Weather(self))
         await self.add_cog(SearchDDG(self))
+        await self.add_cog(Counters(self))
 
         # 2) Register app commands on the tree
         self.tree.add_command(mute_cmd)
