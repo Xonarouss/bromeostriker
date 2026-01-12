@@ -633,7 +633,7 @@ class Giveaway(commands.Cog):
         )
         self.bot.add_view(ParticipateView(self, st, ended=False))
         try:
-            await interaction.followup.send(f\"✅ Giveaway geplaatst in {channel.mention}.\", ephemeral=True)
+            await interaction.followup.send(f"✅ Giveaway geplaatst in {channel.mention}.", ephemeral=True)
         except Exception:
             pass
 
