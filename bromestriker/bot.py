@@ -15,6 +15,7 @@ from .cogs.music import Music
 from .cogs.weather import Weather
 from .cogs.search_ddg import SearchDDG
 from .cogs.counters import Counters
+from .cogs.giveaway import Giveaway
 
 STRIKE1_DURATION = 24 * 60 * 60
 STRIKE2_DURATION = 7 * 24 * 60 * 60
@@ -97,6 +98,13 @@ class BromeStriker(commands.Bot):
         await self.add_cog(Weather(self))
         await self.add_cog(SearchDDG(self))
         await self.add_cog(Counters(self))
+        gw = Giveaway(self)
+        await self.add_cog(gw)
+        # Ensure the group is registered for syncing
+        try:
+            self.tree.add_command(gw.giveaway)
+        except Exception:
+            pass
 
         # 2) Register app commands on the tree
         self.tree.add_command(mute_cmd)

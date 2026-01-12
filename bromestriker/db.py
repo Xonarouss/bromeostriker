@@ -58,6 +58,37 @@ class DB:
             PRIMARY KEY (guild_id, kind)
         );
         """)
+
+        # --- giveaways ---
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS giveaways (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            prize TEXT NOT NULL,
+            description TEXT,
+            max_participants INTEGER,
+            end_at INTEGER NOT NULL,
+            created_by INTEGER NOT NULL,
+            thumbnail_name TEXT,
+            ended INTEGER NOT NULL DEFAULT 0,
+            winner_id INTEGER
+        );
+        """)
+        # lightweight migrations (ignore if already applied)
+        try:
+            cur.execute("ALTER TABLE giveaways ADD COLUMN max_participants INTEGER")
+        except Exception:
+            pass
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS giveaway_entries (
+            giveaway_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            joined_at INTEGER NOT NULL,
+            PRIMARY KEY (giveaway_id, user_id)
+        );
+        """)
         self.conn.commit()
 
         # Best-effort migration: older DBs won't have the counters table.
@@ -186,3 +217,71 @@ class DB:
         cur = self.conn.cursor()
         cur.execute("SELECT guild_id, kind, channel_id, category_id, created_at, updated_at FROM counters WHERE guild_id=?", (guild_id,))
         return cur.fetchall()
+
+    # --- giveaways ---
+    def create_giveaway(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+        prize: str,
+        description: str | None,
+        max_participants: int | None,
+        end_at: int,
+        created_by: int,
+        thumbnail_name: str | None = None,
+    ) -> int:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO giveaways (guild_id, channel_id, message_id, prize, description, max_participants, end_at, created_by, thumbnail_name, ended)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (guild_id, channel_id, message_id, prize, description, max_participants, end_at, created_by, thumbnail_name),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def add_giveaway_entry(self, giveaway_id: int, user_id: int) -> bool:
+        """Returns True if newly added, False if already existed."""
+        cur = self.conn.cursor()
+        now = int(time.time())
+        cur.execute(
+            "INSERT OR IGNORE INTO giveaway_entries (giveaway_id, user_id, joined_at) VALUES (?, ?, ?)",
+            (giveaway_id, user_id, now),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def giveaway_entry_count(self, giveaway_id: int) -> int:
+        cur = self.conn.cursor()
+        cur.execute("SELECT COUNT(1) AS c FROM giveaway_entries WHERE giveaway_id=?", (giveaway_id,))
+        row = cur.fetchone()
+        return int(row["c"]) if row else 0
+
+    def get_giveaway(self, giveaway_id: int) -> sqlite3.Row | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM giveaways WHERE id=?", (giveaway_id,))
+        return cur.fetchone()
+
+    def get_active_giveaways(self, now_ts: int | None = None) -> List[sqlite3.Row]:
+        cur = self.conn.cursor()
+        if now_ts is None:
+            cur.execute("SELECT * FROM giveaways WHERE ended=0")
+        else:
+            cur.execute("SELECT * FROM giveaways WHERE ended=0 AND end_at <= ?", (now_ts,))
+        return cur.fetchall()
+
+    def get_giveaway_entries(self, giveaway_id: int) -> List[int]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT user_id FROM giveaway_entries WHERE giveaway_id=?", (giveaway_id,))
+        return [int(r["user_id"]) for r in cur.fetchall()]
+
+    def end_giveaway(self, giveaway_id: int, winner_id: int | None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE giveaways SET ended=1, winner_id=? WHERE id=?",
+            (winner_id, giveaway_id),
+        )
+        self.conn.commit()

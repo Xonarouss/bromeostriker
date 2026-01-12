@@ -130,6 +130,12 @@ class GuildPlayer:
         # live volume updates
         self.current_audio: Optional[discord.PCMVolumeTransformer] = None
 
+        # where to post embeds (always the most recent channel a music command was used in)
+        self.text_channel_id: Optional[int] = None
+
+        # activity for idle-disconnect logic
+        self.last_activity: float = time.monotonic()
+
 
 class PlayerControls(discord.ui.View):
     def __init__(self, cog: "Music", guild_id: int):
@@ -152,6 +158,7 @@ class PlayerControls(discord.ui.View):
     async def pause_resume(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard(interaction):
             return
+        self.cog._touch(self.guild_id, channel_id=getattr(interaction.channel, "id", None))
         vc = interaction.guild.voice_client if interaction.guild else None
         player = self.cog._get_player(self.guild_id)
 
@@ -174,6 +181,7 @@ class PlayerControls(discord.ui.View):
     async def skip(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard(interaction):
             return
+        self.cog._touch(self.guild_id, channel_id=getattr(interaction.channel, "id", None))
         vc = interaction.guild.voice_client if interaction.guild else None
         if vc and (vc.is_playing() or vc.is_paused()):
             vc.stop()
@@ -183,6 +191,7 @@ class PlayerControls(discord.ui.View):
     async def vol_down(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard(interaction):
             return
+        self.cog._touch(self.guild_id, channel_id=getattr(interaction.channel, "id", None))
         player = self.cog._get_player(self.guild_id)
         player.volume = max(0.0, player.volume - 0.1)
         if player.current_audio:
@@ -193,6 +202,7 @@ class PlayerControls(discord.ui.View):
     async def vol_up(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard(interaction):
             return
+        self.cog._touch(self.guild_id, channel_id=getattr(interaction.channel, "id", None))
         player = self.cog._get_player(self.guild_id)
         player.volume = min(1.0, player.volume + 0.1)
         if player.current_audio:
@@ -203,6 +213,7 @@ class PlayerControls(discord.ui.View):
     async def stop(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         if not await self._guard(interaction):
             return
+        self.cog._touch(self.guild_id, channel_id=getattr(interaction.channel, "id", None))
 
         player = self.cog._get_player(self.guild_id)
         try:
@@ -273,6 +284,24 @@ class Music(commands.Cog):
         if guild_id not in self.players:
             self.players[guild_id] = GuildPlayer()
         return self.players[guild_id]
+
+    def _touch(self, guild_id: int, *, channel_id: Optional[int] = None) -> None:
+        """Marks activity + remembers the latest text channel for embeds."""
+        player = self._get_player(guild_id)
+        player.last_activity = time.monotonic()
+        if channel_id:
+            player.text_channel_id = channel_id
+
+    def _resolve_text_channel(self, guild: discord.Guild) -> Optional[discord.abc.Messageable]:
+        show_in = self._get_player(guild.id).text_channel_id
+        if show_in:
+            ch = guild.get_channel(show_in)
+            if isinstance(ch, discord.abc.Messageable):
+                return ch
+        # fallback: try system channel
+        if guild.system_channel and isinstance(guild.system_channel, discord.abc.Messageable):
+            return guild.system_channel
+        return None
 
     async def _join(self, interaction: discord.Interaction) -> Optional[discord.VoiceClient]:
         if not interaction.guild:
@@ -425,36 +454,47 @@ class Music(commands.Cog):
 
         return Track(title=title, url=stream_url, webpage_url=webpage, duration=duration)
 
-    async def _start_player_task(self, guild: discord.Guild, text_channel: discord.abc.Messageable):
+    async def _start_player_task(self, guild: discord.Guild):
         player = self._get_player(guild.id)
         async with player._lock:
             if player._task and not player._task.done():
                 return
-            player._task = asyncio.create_task(self._player_loop(guild, text_channel))
+            player._task = asyncio.create_task(self._player_loop(guild))
 
-    async def _player_loop(self, guild: discord.Guild, text_channel: discord.abc.Messageable):
+    async def _player_loop(self, guild: discord.Guild):
         player = self._get_player(guild.id)
+
+        async def safe_send(embed: discord.Embed | None = None, content: str | None = None, view: discord.ui.View | None = None):
+            ch = self._resolve_text_channel(guild)
+            if not ch:
+                return None
+            try:
+                return await ch.send(content=content, embed=embed, view=view)
+            except Exception:
+                return None
 
         while True:
             try:
                 track: Track = await asyncio.wait_for(player.queue.get(), timeout=300)  # 5 min
             except asyncio.TimeoutError:
                 vc = guild.voice_client
+                # Don't auto-disconnect if we're currently playing (e.g. radio stream)
                 if vc and vc.is_connected() and (not vc.is_playing()) and (not vc.is_paused()):
-                    try:
-                        await text_channel.send(embed=self._embed("👋 Leaving voice", "Ik ben weggegaan wegens **5 minuten inactiviteit**."))
-                    except Exception:
-                        pass
-                    try:
-                        await vc.disconnect()
-                    except Exception:
-                        pass
+                    # Only disconnect if we've truly been idle for 5 min (no playback + no commands)
+                    idle_for = time.monotonic() - player.last_activity
+                    if idle_for >= 300:
+                        await safe_send(embed=self._embed("👋 Leaving voice", "Ik ben weggegaan wegens **5 minuten inactiviteit**."))
+                        try:
+                            await vc.disconnect()
+                        except Exception:
+                            pass
                 return
 
             if player.loop and player.current:
                 track = player.current
 
             player.current = track
+            self._touch(guild.id)  # playback activity
             player.started_at = time.monotonic()
             player.paused_at = None
             player.paused_total = 0.0
@@ -487,7 +527,7 @@ class Music(commands.Cog):
 
             # Now playing message + controls
             try:
-                player.now_msg = await text_channel.send(
+                player.now_msg = await safe_send(
                     embed=self._embed("🎶 Nu aan het afspelen", f"[{track.title}]({track.webpage_url})"),
                     view=self._controls_view(guild.id),
                 )
@@ -514,9 +554,18 @@ class Music(commands.Cog):
                     auto_track = await self._ytdl_extract(f"ytsearch1:{seed} mix")
                     await player.queue.put(auto_track)
                     try:
-                        await text_channel.send(embed=self._embed("📻 Autoplay", f"Toegevoegd: [{auto_track.title}]({auto_track.webpage_url})"))
+                        await safe_send(embed=self._embed("📻 Autoplay", f"Toegevoegd: [{auto_track.title}]({auto_track.webpage_url})"))
                     except Exception:
                         pass
+                except Exception:
+                    pass
+
+            # Radio streams can sometimes end / drop. If the last track was radio and nothing else is queued,
+            # automatically restart the same station instead of triggering idle disconnect.
+            if track.is_radio and player.queue.empty() and not player.loop:
+                try:
+                    await player.queue.put(track)
+                    self._touch(guild.id)
                 except Exception:
                     pass
 
@@ -555,6 +604,7 @@ class Music(commands.Cog):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True)
+        self._touch(interaction.guild.id, channel_id=getattr(interaction.channel, "id", None))
 
         st = (station or "").strip().lower()
         url = self.radio_stations.get(st)
@@ -586,41 +636,16 @@ class Music(commands.Cog):
             url=url,
             webpage_url=url,
             duration=None,
+            requester_id=interaction.user.id,
             is_radio=True,
             radio_name=st,
         )
-        player.current = track
-        player.started_at = time.monotonic()
-        player.paused_at = None
-        player.paused_total = 0.0
 
-        source = discord.FFmpegPCMAudio(
-            url,
-            executable=self.ffmpeg_path,
-            before_options=FFMPEG_BEFORE_OPTS,
-            options=FFMPEG_OPTS,
-        )
-        audio = discord.PCMVolumeTransformer(source, volume=player.volume)
-        player.current_audio = audio
-
-        try:
-            vc.play(audio)
-        except Exception as e:
-            return await interaction.followup.send(f"Kon radio stream niet starten: {e}", ephemeral=True)
-
-        try:
-            player.now_msg = await interaction.channel.send(
-                embed=self._embed("📻 Radio", f"**{st}**\n{url}"),
-                view=self._controls_view(interaction.guild.id),
-            )
-        except Exception:
-            player.now_msg = None
-
-        if player.progress_task and not player.progress_task.done():
-            player.progress_task.cancel()
-        player.progress_task = asyncio.create_task(self._progress_updater(interaction.guild.id))
+        await player.queue.put(track)
+        await self._start_player_task(interaction.guild)
 
         await interaction.followup.send(f"📻 Speelt nu **{st}**.", ephemeral=True)
+
 
     @radio.command(name="stop", description="Stop radio playback.")
     async def radio_stop(self, interaction: discord.Interaction):
@@ -644,6 +669,8 @@ class Music(commands.Cog):
             return
         if not self._same_vc_or_admin(interaction):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
+
+        self._touch(interaction.guild.id, channel_id=getattr(interaction.channel, "id", None))
 
         try:
             await interaction.response.defer(ephemeral=True)
@@ -669,7 +696,7 @@ class Music(commands.Cog):
 
         player = self._get_player(interaction.guild.id)
         await player.queue.put(track)
-        await self._start_player_task(interaction.guild, interaction.channel)
+        await self._start_player_task(interaction.guild)
 
         await interaction.followup.send(
             embed=self._embed("✅ Toegevoegd aan wachtrij", f"[{track.title}]({track.webpage_url})"),
