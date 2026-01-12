@@ -91,10 +91,6 @@ class Counters(commands.Cog):
         self._twitch_token: Optional[str] = None
         self._twitch_token_exp: int = 0
 
-        # cache last known good counts per guild/kind to prevent flapping when scraping intermittently fails
-        # key: (guild_id, kind)
-        self._last_counter_values: Dict[tuple[int, str], int] = {}
-
         # config
         self.category_name = (os.getenv("COUNTER_CATEGORY_NAME") or "📊 Counters").strip()
 
@@ -158,29 +154,6 @@ class Counters(commands.Cog):
         return int(val * mult)
 
     
-
-def _stable_count(self, guild_id: int, kind: str, new_value: Optional[int]) -> Optional[int]:
-    """Prevent counters from flapping to '-' when scraping fails.
-
-    Rules:
-    - If new_value is None or invalid: keep last known good value (if any)
-    - Otherwise: accept new_value (can go up or down) and store it
-    """
-    key = (int(guild_id), str(kind))
-    last = self._last_counter_values.get(key)
-
-    if new_value is None:
-        return last
-
-    try:
-        nv = int(new_value)
-    except Exception:
-        return last
-
-    self._last_counter_values[key] = nv
-    return nv
-
-
     async def _get_instagram_followers(self) -> Optional[int]:
         """Instagram follower count via web scraping (no API)."""
         if not self.instagram_username:
@@ -556,12 +529,8 @@ def _stable_count(self, guild_id: int, kind: str, new_value: Optional[int]) -> O
 
         members = guild.member_count
         twitch = await self._get_twitch_followers()
-        instagram_raw = await self._get_instagram_followers()
-        tiktok_raw = await self._get_tiktok_followers()
-
-        # Stabilize social counters to prevent '-' flapping when scraping intermittently fails
-        instagram = self._stable_count(guild.id, "instagram", instagram_raw)
-        tiktok = self._stable_count(guild.id, "tiktok", tiktok_raw)
+        instagram = await self._get_instagram_followers()
+        tiktok = await self._get_tiktok_followers()
 
         await self._maybe_rename(ch_by_kind.get("members"), self.tpl_members, members, fmt=_fmt_nl)
         await self._maybe_rename(ch_by_kind.get("twitch"), self.tpl_twitch, twitch, fmt=_fmt_nl)
