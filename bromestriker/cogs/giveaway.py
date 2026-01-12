@@ -26,6 +26,14 @@ def _is_admin(member: discord.Member) -> bool:
         return False
 
 
+def _can_manage_giveaway(member: discord.Member) -> bool:
+    """Admins OR B-Crew can cancel/reroll giveaways."""
+    try:
+        return bool(member.guild_permissions.administrator) or (member.get_role(1027533834318774293) is not None)
+    except Exception:
+        return False
+
+
 
 def _can_create_giveaway(member: discord.Member) -> bool:
     """Admins OR B-Crew can create giveaways."""
@@ -153,25 +161,41 @@ class ParticipateView(discord.ui.View):
             return await interaction.response.send_message("Je doet al mee ✅", ephemeral=True)
 
         # Update message participant count
-        try:
-            msg = await interaction.channel.fetch_message(self.state.message_id)
-        except Exception:
-            msg = None
-
         count = self.cog.bot.db.giveaway_entry_count(self.state.giveaway_id)
-        # Update button label with count
         try:
             self.participate_btn.label = f"Participate ({count})"
         except Exception:
             pass
 
-        if msg:
+        # Edit the message that contains this button (most reliable)
+        try:
+            await interaction.response.edit_message(
+                embed=self.cog._giveaway_embed(self.state, count=count),
+                view=self,
+            )
+        except Exception:
+            # Fallback: try a followup edit
             try:
-                await msg.edit(embed=self.cog._giveaway_embed(self.state, count=count), view=self)
-            except Exception:
-                pass
+                msg = interaction.message
+                if msg:
+                    await msg.edit(embed=self.cog._giveaway_embed(self.state, count=count), view=self)
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
+            try:
+                # Ensure we at least acknowledge
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Je doet mee! 🎉", ephemeral=True)
+                else:
+                    await interaction.followup.send("Je doet mee! 🎉", ephemeral=True)
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
+        else:
+            # Confirmation as ephemeral followup
+            try:
+                await interaction.followup.send("Je doet mee! 🎉", ephemeral=True)
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
 
-        await interaction.response.send_message("Je doet mee! 🎉", ephemeral=True)
 
 
     async def _on_cancel(self, interaction: discord.Interaction):
@@ -180,6 +204,7 @@ class ParticipateView(discord.ui.View):
         if not _is_admin(interaction.user):
             return await interaction.response.send_message("Alleen admins kunnen een giveaway cancellen.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
+        responded = False
         ok = await self.cog._cancel_giveaway(self.state, interaction=interaction)
         if ok:
             await interaction.followup.send("Giveaway gecanceld.", ephemeral=True)
@@ -192,6 +217,7 @@ class ParticipateView(discord.ui.View):
         if not _is_admin(interaction.user):
             return await interaction.response.send_message("Alleen admins kunnen rerollen.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
+        responded = False
         ok = await self.cog._reroll_giveaway(self.state, interaction=interaction)
         if ok:
             await interaction.followup.send("Reroll uitgevoerd.", ephemeral=True)
@@ -296,10 +322,10 @@ class Giveaway(commands.Cog):
                 for r in due:
                     try:
                         await self._finish_giveaway(self._row_to_state(r))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as e:
+                        print('Giveaway finish error:', repr(e))
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
             await asyncio.sleep(20)
 
     async def _finish_giveaway(self, st: GiveawayState) -> None:
@@ -314,6 +340,11 @@ class Giveaway(commands.Cog):
             return
 
         channel = guild.get_channel(st.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(st.channel_id)
+            except Exception:
+                channel = None
         if not isinstance(channel, discord.abc.Messageable):
             self.bot.db.end_giveaway(st.giveaway_id, winner_ids=None)
             return
@@ -350,8 +381,8 @@ class Giveaway(commands.Cog):
                 except Exception:
                     pass
                 await msg.edit(embed=self._giveaway_embed(st, count=count), view=v)
-            except Exception:
-                pass
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
 
 
         # Announce result
@@ -396,6 +427,11 @@ class Giveaway(commands.Cog):
         if not guild:
             return False
         channel = guild.get_channel(st.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(st.channel_id)
+            except Exception:
+                channel = None
         if not isinstance(channel, discord.abc.Messageable):
             return False
 
@@ -417,8 +453,8 @@ class Giveaway(commands.Cog):
                 emb.title = f"{st.prize} [CANCELLED]"
                 emb.description = (emb.description or "") + "\n\n🛑 **Cancelled**"
                 await msg.edit(embed=emb, view=v)
-            except Exception:
-                pass
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
 
         # Optional announcement in channel
         try:
@@ -436,6 +472,11 @@ class Giveaway(commands.Cog):
         if not guild:
             return False
         channel = guild.get_channel(st.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(st.channel_id)
+            except Exception:
+                channel = None
         if not isinstance(channel, discord.abc.Messageable):
             return False
 
@@ -463,8 +504,8 @@ class Giveaway(commands.Cog):
                 m = guild.get_member(uid) or await guild.fetch_member(uid)
                 if isinstance(m, discord.Member):
                     winner_members.append(m)
-            except Exception:
-                pass
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
 
         # Store new winners (still ended)
         self.bot.db.end_giveaway(st.giveaway_id, winner_ids=winner_ids)
@@ -483,13 +524,13 @@ class Giveaway(commands.Cog):
         for m in winner_members:
             try:
                 await m.send(embed=self._winner_dm_embed(st))
-            except Exception:
-                pass
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
             try:
                 if role:
                     await m.add_roles(role, reason="Giveaway reroll winnaar")
-            except Exception:
-                pass
+            except Exception as e:
+                print('Giveaway watcher error:', repr(e))
         return True
 
     giveaway = app_commands.Group(name="giveaway", description="Giveaway commands (admins only)")
@@ -532,6 +573,7 @@ class Giveaway(commands.Cog):
             deelnemers = None
 
         await interaction.response.defer(ephemeral=True)
+        responded = False
 
         # Post embed
         thumb_name = None
@@ -590,6 +632,10 @@ class Giveaway(commands.Cog):
             winner_ids_json=None,
         )
         self.bot.add_view(ParticipateView(self, st, ended=False))
+        try:
+            await interaction.followup.send(f\"✅ Giveaway geplaatst in {channel.mention}.\", ephemeral=True)
+        except Exception:
+            pass
 
         # Update message with the real state (button label)
         try:
