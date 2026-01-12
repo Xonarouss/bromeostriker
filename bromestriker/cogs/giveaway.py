@@ -26,6 +26,15 @@ def _is_admin(member: discord.Member) -> bool:
         return False
 
 
+
+def _can_create_giveaway(member: discord.Member) -> bool:
+    """Admins OR B-Crew can create giveaways."""
+    try:
+        return bool(member.guild_permissions.administrator) or (member.get_role(1027533834318774293) is not None)
+    except Exception:
+        return False
+
+
 def _parse_endtime(s: str) -> int:
     """Parse a human-ish duration/date string into a unix timestamp (seconds).
 
@@ -508,8 +517,8 @@ class Giveaway(commands.Cog):
     ):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return await interaction.response.send_message("Dit kan alleen in een server.", ephemeral=True)
-        if not _is_admin(interaction.user):
-            return await interaction.response.send_message("Alleen admins kunnen een giveaway aanmaken.", ephemeral=True)
+        if not _can_create_giveaway(interaction.user):
+            return await interaction.response.send_message("Alleen admins of B-Crew kunnen een giveaway aanmaken.", ephemeral=True)
 
         try:
             end_at = _parse_endtime(eindtijd)
