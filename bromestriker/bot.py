@@ -114,6 +114,7 @@ class BromeStriker(commands.Bot):
         # 3) Sync commands (guild sync = instant)
         guild = discord.Object(id=self.guild_id)
         await self.tree.sync(guild=guild)
+        self.tree.copy_global_to(guild=guild)
         print(f"✅ Slash commands synced to guild={self.guild_id}")
 
         # 4) Start background task
