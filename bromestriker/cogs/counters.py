@@ -116,6 +116,14 @@ class Counters(commands.Cog):
         # Note: scraping can break if platforms change their HTML/JSON, but it's how most counter bots work.
         self.instagram_username = (os.getenv("INSTAGRAM_USERNAME") or "").strip().lstrip("@")
         self.instagram_sessionid = (os.getenv("INSTAGRAM_SESSIONID") or "").strip()
+        # Optional seed value to avoid starting at "—" when Instagram scraping is temporarily blocked
+        self.instagram_static: Optional[int] = None
+        _ig_static = (os.getenv("COUNTER_INSTAGRAM_STATIC") or "").strip()
+        if _ig_static.isdigit():
+            self.instagram_static = int(_ig_static)
+
+        # Instagram rate-limit backoff (epoch seconds). When hit with HTTP 429 we pause scraping.
+        self._ig_backoff_until: int = 0
         self.tiktok_username = (os.getenv("TIKTOK_USERNAME") or "").strip().lstrip("@")
 
 
@@ -184,6 +192,12 @@ class Counters(commands.Cog):
         if not self.instagram_username:
             return None
 
+
+        # Backoff when Instagram rate-limits us (HTTP 429)
+        now = int(time.time())
+        if now < getattr(self, '_ig_backoff_until', 0):
+            return None
+
         url = f"https://www.instagram.com/{self.instagram_username}/"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -198,6 +212,10 @@ class Counters(commands.Cog):
             try:
                 async with aiohttp.ClientSession(headers=headers) as session:
                     async with session.get(url, timeout=25, allow_redirects=True) as resp:
+                        if resp.status == 429:
+                            log.warning("Instagram scrape HTTP 429 (rate limited) - backing off for 2 hours")
+                            self._ig_backoff_until = int(time.time()) + 2 * 60 * 60
+                            return None
                         if resp.status >= 400:
                             log.warning("Instagram scrape HTTP %s", resp.status)
                             return None
@@ -556,6 +574,12 @@ class Counters(commands.Cog):
         twitch = await self._get_twitch_followers()
         instagram_raw = await self._get_instagram_followers()
         tiktok_raw = await self._get_tiktok_followers()
+
+        # If Instagram scraping fails before we ever got a good value, seed from COUNTER_INSTAGRAM_STATIC
+        if instagram_raw is None and getattr(self, "instagram_static", None) is not None:
+            key = (int(guild.id), "instagram")
+            if key not in self._last_counter_values:
+                instagram_raw = int(self.instagram_static)
 
         # Stabilize social counters to prevent '—' flapping when scraping intermittently fails
         instagram = self._stable_count(guild.id, "instagram", instagram_raw)
