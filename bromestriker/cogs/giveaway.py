@@ -107,7 +107,7 @@ class ParticipateView(discord.ui.View):
 
         # Persistent buttons need stable custom_id
         self.participate_btn = discord.ui.Button(
-            label="Participate",
+            label="Meedoen",
             style=discord.ButtonStyle.primary,
             emoji="🎉",
             custom_id=f"giveaway_participate:{state.giveaway_id}",
@@ -116,8 +116,18 @@ class ParticipateView(discord.ui.View):
         self.participate_btn.callback = self._on_click
         self.add_item(self.participate_btn)
 
+        self.leave_btn = discord.ui.Button(
+            label="Verlaten",
+            style=discord.ButtonStyle.secondary,
+            emoji="🚪",
+            custom_id=f"giveaway_leave:{state.giveaway_id}",
+            disabled=ended,
+        )
+        self.leave_btn.callback = self._on_leave
+        self.add_item(self.leave_btn)
+
         self.cancel_btn = discord.ui.Button(
-            label="Cancel",
+            label="Annuleren",
             style=discord.ButtonStyle.danger,
             emoji="🛑",
             custom_id=f"giveaway_cancel:{state.giveaway_id}",
@@ -127,7 +137,7 @@ class ParticipateView(discord.ui.View):
         self.add_item(self.cancel_btn)
 
         self.reroll_btn = discord.ui.Button(
-            label="Reroll",
+            label="Opnieuw trekken",
             style=discord.ButtonStyle.secondary,
             emoji="🔁",
             custom_id=f"giveaway_reroll:{state.giveaway_id}",
@@ -158,12 +168,12 @@ class ParticipateView(discord.ui.View):
 
         added = self.cog.bot.db.add_giveaway_entry(self.state.giveaway_id, member.id)
         if not added:
-            return await interaction.response.send_message("Je doet al mee ✅", ephemeral=True)
+            return await interaction.response.send_message("Je doet al mee ✅ (druk op **Verlaten** als je eruit wil)", ephemeral=True)
 
         # Update message participant count
         count = self.cog.bot.db.giveaway_entry_count(self.state.giveaway_id)
         try:
-            self.participate_btn.label = f"Participate ({count})"
+            self.participate_btn.label = f"Meedoen ({count})"
         except Exception:
             pass
 
@@ -195,6 +205,48 @@ class ParticipateView(discord.ui.View):
                 await interaction.followup.send("Je doet mee! 🎉", ephemeral=True)
             except Exception as e:
                 print('Giveaway watcher error:', repr(e))
+    async def _on_leave(self, interaction: discord.Interaction):
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return await interaction.response.send_message("Dit werkt alleen in een server.", ephemeral=True)
+
+        member: discord.Member = interaction.user
+
+        removed = self.cog.bot.db.remove_giveaway_entry(self.state.giveaway_id, member.id)
+        if not removed:
+            return await interaction.response.send_message("Je deed niet mee aan deze giveaway.", ephemeral=True)
+
+        count = self.cog.bot.db.giveaway_entry_count(self.state.giveaway_id)
+        try:
+            self.participate_btn.label = f"Meedoen ({count})"
+        except Exception:
+            pass
+
+        try:
+            await interaction.response.edit_message(
+                embed=self.cog._giveaway_embed(self.state, count=count),
+                view=self,
+            )
+        except Exception:
+            try:
+                msg = interaction.message
+                if msg:
+                    await msg.edit(embed=self.cog._giveaway_embed(self.state, count=count), view=self)
+            except Exception:
+                pass
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Je bent uit de giveaway gestapt. 🚪", ephemeral=True)
+                else:
+                    await interaction.followup.send("Je bent uit de giveaway gestapt. 🚪", ephemeral=True)
+            except Exception:
+                pass
+        else:
+            try:
+                await interaction.followup.send("Je bent uit de giveaway gestapt. 🚪", ephemeral=True)
+            except Exception:
+                pass
+
+
 
 
 
@@ -275,7 +327,7 @@ class Giveaway(commands.Cog):
             description=(st.description or ""),
             colour=BRAND_GREEN,
         )
-        e.add_field(name="Eindigt", value=f"<t:{st.end_at}:F>\n(<t:{st.end_at}:R>)", inline=False)
+        e.add_field(name="Eindigt", value=end_value)
         if st.max_participants:
             e.add_field(name="Deelnemers", value=f"{count}/{st.max_participants}", inline=True)
         else:
@@ -286,14 +338,14 @@ class Giveaway(commands.Cog):
         return e
 
     def _results_embed(self, st: GiveawayState, *, winners: list[discord.Member], count: int) -> discord.Embed:
-        title = f"{st.prize} [RESULTS]"
+        title = f"{st.prize} [RESULTATEN]"
         if winners:
-            desc = "The winner of this giveaway is tagged above!\nCongratulations 🎉" if len(winners) == 1 else "The winners of this giveaway are tagged above!\nCongratulations 🎉"
+            desc = "De winnaar(s) van deze giveaway is/zijn hierboven getagd!\nGefeliciteerd 🎉" if len(winners) == 1 else "The winners of this giveaway are tagged above!\nGefeliciteerd 🎉"
         else:
             desc = "Geen deelnemers 😢"
         e = discord.Embed(title=title, description=desc, colour=BRAND_GREEN)
-        e.add_field(name="Prize", value=st.prize, inline=True)
-        e.add_field(name="Participants", value=str(count), inline=True)
+        e.add_field(name="Prijs", value=st.prize, inline=True)
+        e.add_field(name="Deelnemers", value=str(count), inline=True)
         if winners:
             e.add_field(name="Winners", value=str(len(winners)), inline=True)
         e.set_footer(text="BromeoLIVE • Giveaway")
@@ -377,7 +429,7 @@ class Giveaway(commands.Cog):
             try:
                 v = ParticipateView(self, st, ended=True)
                 try:
-                    v.participate_btn.label = f"Participate ({count})"
+                    v.participate_btn.label = f"Meedoen ({count})"
                 except Exception:
                     pass
                 await msg.edit(embed=self._giveaway_embed(st, count=count), view=v)
