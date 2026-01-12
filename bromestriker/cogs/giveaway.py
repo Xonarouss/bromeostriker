@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 import random
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -78,23 +79,45 @@ class GiveawayState:
     end_at: int
     max_participants: Optional[int]
     thumbnail_name: Optional[str]
-
-
+    winners_count: int = 1
+    winner_ids_json: Optional[str] = None
 class ParticipateView(discord.ui.View):
-    def __init__(self, cog: "Giveaway", state: GiveawayState):
+    def __init__(self, cog: "Giveaway", state: GiveawayState, *, ended: bool = False):
         super().__init__(timeout=None)
         self.cog = cog
         self.state = state
+        self.ended = ended
 
-        # Persistent button needs a stable custom_id
-        self.btn = discord.ui.Button(
+        # Persistent buttons need stable custom_id
+        self.participate_btn = discord.ui.Button(
             label="Participate",
             style=discord.ButtonStyle.primary,
             emoji="🎉",
             custom_id=f"giveaway_participate:{state.giveaway_id}",
+            disabled=ended,
         )
-        self.btn.callback = self._on_click
-        self.add_item(self.btn)
+        self.participate_btn.callback = self._on_click
+        self.add_item(self.participate_btn)
+
+        self.cancel_btn = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.danger,
+            emoji="🛑",
+            custom_id=f"giveaway_cancel:{state.giveaway_id}",
+            disabled=ended,
+        )
+        self.cancel_btn.callback = self._on_cancel
+        self.add_item(self.cancel_btn)
+
+        self.reroll_btn = discord.ui.Button(
+            label="Reroll",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔁",
+            custom_id=f"giveaway_reroll:{state.giveaway_id}",
+            disabled=not ended,
+        )
+        self.reroll_btn.callback = self._on_reroll
+        self.add_item(self.reroll_btn)
 
     async def _on_click(self, interaction: discord.Interaction):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
@@ -129,7 +152,7 @@ class ParticipateView(discord.ui.View):
         count = self.cog.bot.db.giveaway_entry_count(self.state.giveaway_id)
         # Update button label with count
         try:
-            self.btn.label = f"Participate ({count})"
+            self.participate_btn.label = f"Participate ({count})"
         except Exception:
             pass
 
@@ -140,6 +163,31 @@ class ParticipateView(discord.ui.View):
                 pass
 
         await interaction.response.send_message("Je doet mee! 🎉", ephemeral=True)
+
+
+    async def _on_cancel(self, interaction: discord.Interaction):
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return await interaction.response.send_message("Dit werkt alleen in een server.", ephemeral=True)
+        if not _is_admin(interaction.user):
+            return await interaction.response.send_message("Alleen admins kunnen een giveaway cancellen.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        ok = await self.cog._cancel_giveaway(self.state, interaction=interaction)
+        if ok:
+            await interaction.followup.send("Giveaway gecanceld.", ephemeral=True)
+        else:
+            await interaction.followup.send("Kon giveaway niet cancellen (misschien al afgelopen).", ephemeral=True)
+
+    async def _on_reroll(self, interaction: discord.Interaction):
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return await interaction.response.send_message("Dit werkt alleen in een server.", ephemeral=True)
+        if not _is_admin(interaction.user):
+            return await interaction.response.send_message("Alleen admins kunnen rerollen.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        ok = await self.cog._reroll_giveaway(self.state, interaction=interaction)
+        if ok:
+            await interaction.followup.send("Reroll uitgevoerd.", ephemeral=True)
+        else:
+            await interaction.followup.send("Kon niet rerollen (geen deelnemers of giveaway niet afgelopen).", ephemeral=True)
 
 
 class Giveaway(commands.Cog):
@@ -168,7 +216,7 @@ class Giveaway(commands.Cog):
             rows = []
         for r in rows:
             st = self._row_to_state(r)
-            self.bot.add_view(ParticipateView(self, st))
+            self.bot.add_view(ParticipateView(self, st, ended=bool(int(r['ended']))))
 
     def _row_to_state(self, r) -> GiveawayState:
         return GiveawayState(
@@ -181,6 +229,8 @@ class Giveaway(commands.Cog):
             end_at=int(r["end_at"]),
             max_participants=(int(r["max_participants"]) if r["max_participants"] is not None else None),
             thumbnail_name=(str(r["thumbnail_name"]) if r["thumbnail_name"] else None),
+            winners_count=(int(r["winners_count"]) if ("winners_count" in r.keys() and r["winners_count"] is not None) else 1),
+            winner_ids_json=(str(r["winner_ids"]) if ("winner_ids" in r.keys() and r["winner_ids"]) else None),
         )
 
     def _giveaway_embed(self, st: GiveawayState, *, count: int) -> discord.Embed:
@@ -200,12 +250,17 @@ class Giveaway(commands.Cog):
             e.set_thumbnail(url=f"attachment://{st.thumbnail_name}")
         return e
 
-    def _results_embed(self, st: GiveawayState, *, winner: Optional[discord.Member], count: int) -> discord.Embed:
+    def _results_embed(self, st: GiveawayState, *, winners: list[discord.Member], count: int) -> discord.Embed:
         title = f"{st.prize} [RESULTS]"
-        desc = "The winner of this giveaway is tagged above!\nCongratulations 🎉" if winner else "Geen deelnemers 😢"
+        if winners:
+            desc = "The winner of this giveaway is tagged above!\nCongratulations 🎉" if len(winners) == 1 else "The winners of this giveaway are tagged above!\nCongratulations 🎉"
+        else:
+            desc = "Geen deelnemers 😢"
         e = discord.Embed(title=title, description=desc, colour=BRAND_GREEN)
         e.add_field(name="Prize", value=st.prize, inline=True)
         e.add_field(name="Participants", value=str(count), inline=True)
+        if winners:
+            e.add_field(name="Winners", value=str(len(winners)), inline=True)
         e.set_footer(text="BromeoLIVE • Giveaway")
         if st.thumbnail_name:
             e.set_thumbnail(url=f"attachment://{st.thumbnail_name}")
@@ -246,24 +301,32 @@ class Giveaway(commands.Cog):
 
         guild = self.bot.get_guild(st.guild_id)
         if not guild:
-            self.bot.db.end_giveaway(st.giveaway_id, None)
+            self.bot.db.end_giveaway(st.giveaway_id, winner_ids=None)
             return
 
         channel = guild.get_channel(st.channel_id)
         if not isinstance(channel, discord.abc.Messageable):
-            self.bot.db.end_giveaway(st.giveaway_id, None)
+            self.bot.db.end_giveaway(st.giveaway_id, winner_ids=None)
             return
 
         entries = self.bot.db.get_giveaway_entries(st.giveaway_id)
         count = len(entries)
-        winner_member: Optional[discord.Member] = None
+        winner_ids: list[int] = []
+        winner_members: list[discord.Member] = []
 
         if entries:
-            winner_id = random.choice(entries)
-            winner_member = guild.get_member(winner_id) or await guild.fetch_member(winner_id)
-            self.bot.db.end_giveaway(st.giveaway_id, winner_id)
+            k = min(max(1, int(getattr(st, 'winners_count', 1) or 1)), len(entries))
+            winner_ids = random.sample(entries, k=k)
+            for uid in winner_ids:
+                try:
+                    m = guild.get_member(uid) or await guild.fetch_member(uid)
+                    if isinstance(m, discord.Member):
+                        winner_members.append(m)
+                except Exception:
+                    pass
+            self.bot.db.end_giveaway(st.giveaway_id, winner_ids=winner_ids)
         else:
-            self.bot.db.end_giveaway(st.giveaway_id, None)
+            self.bot.db.end_giveaway(st.giveaway_id, winner_ids=None)
 
         # Disable button on original message
         try:
@@ -272,16 +335,18 @@ class Giveaway(commands.Cog):
             msg = None
         if msg:
             try:
-                v = ParticipateView(self, st)
-                for child in v.children:
-                    if isinstance(child, discord.ui.Button):
-                        child.disabled = True
-                await msg.edit(view=v)
+                v = ParticipateView(self, st, ended=True)
+                try:
+                    v.participate_btn.label = f"Participate ({count})"
+                except Exception:
+                    pass
+                await msg.edit(embed=self._giveaway_embed(st, count=count), view=v)
             except Exception:
                 pass
 
+
         # Announce result
-        tag_line = winner_member.mention if winner_member else ""
+        tag_line = " ".join(m.mention for m in winner_members) if winner_members else ""
         files = []
         # Reuse the original attachment (so the results embed can keep the same thumbnail)
         if msg and msg.attachments:
@@ -293,22 +358,130 @@ class Giveaway(commands.Cog):
                 files = []
         await channel.send(
             content=tag_line,
-            embed=self._results_embed(st, winner=winner_member, count=count),
+            embed=self._results_embed(st, winners=winner_members, count=count),
             files=files,
         )
 
         # DM winner + assign role
-        if winner_member:
+        # DM winners + assign role
+        if winner_members:
+            for m in winner_members:
+                try:
+                    await m.send(embed=self._winner_dm_embed(st))
+                except Exception:
+                    pass
+                try:
+                    role = guild.get_role(WINNER_ROLE_ID)
+                    if role:
+                        await m.add_roles(role, reason="Giveaway winnaar")
+                except Exception:
+                    pass
+
+
+    async def _cancel_giveaway(self, st: GiveawayState, *, interaction: discord.Interaction) -> bool:
+        row = self.bot.db.get_giveaway(st.giveaway_id)
+        if not row or int(row["ended"]) == 1:
+            return False
+
+        guild = interaction.guild
+        if not guild:
+            return False
+        channel = guild.get_channel(st.channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return False
+
+        # End without winners
+        self.bot.db.end_giveaway(st.giveaway_id, winner_ids=None)
+
+        # Edit original message: disable participate/cancel, keep reroll disabled too
+        try:
+            msg = await channel.fetch_message(st.message_id)
+        except Exception:
+            msg = None
+        if msg:
             try:
-                await winner_member.send(embed=self._winner_dm_embed(st))
+                count = self.bot.db.giveaway_entry_count(st.giveaway_id)
+                v = ParticipateView(self, st, ended=True)
+                v.reroll_btn.disabled = True
+                # Mark embed as cancelled
+                emb = self._giveaway_embed(st, count=count)
+                emb.title = f"{st.prize} [CANCELLED]"
+                emb.description = (emb.description or "") + "\n\n🛑 **Cancelled**"
+                await msg.edit(embed=emb, view=v)
+            except Exception:
+                pass
+
+        # Optional announcement in channel
+        try:
+            await channel.send(f"🛑 Giveaway **{st.prize}** is gecanceld.")
+        except Exception:
+            pass
+        return True
+
+    async def _reroll_giveaway(self, st: GiveawayState, *, interaction: discord.Interaction) -> bool:
+        row = self.bot.db.get_giveaway(st.giveaway_id)
+        if not row or int(row["ended"]) != 1:
+            return False
+
+        guild = interaction.guild
+        if not guild:
+            return False
+        channel = guild.get_channel(st.channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return False
+
+        entries = self.bot.db.get_giveaway_entries(st.giveaway_id)
+        if not entries:
+            return False
+
+        # Try to avoid previous winners if possible
+        prev = []
+        try:
+            if row.get("winner_ids"):
+                prev = json.loads(row["winner_ids"]) or []
+            elif row.get("winner_id"):
+                prev = [int(row["winner_id"]) ]
+        except Exception:
+            prev = []
+        pool = [uid for uid in entries if uid not in prev] or entries
+
+        winners_count = int(row.get("winners_count") or 1)
+        k = min(max(1, winners_count), len(pool))
+        winner_ids = random.sample(pool, k=k)
+        winner_members: list[discord.Member] = []
+        for uid in winner_ids:
+            try:
+                m = guild.get_member(uid) or await guild.fetch_member(uid)
+                if isinstance(m, discord.Member):
+                    winner_members.append(m)
+            except Exception:
+                pass
+
+        # Store new winners (still ended)
+        self.bot.db.end_giveaway(st.giveaway_id, winner_ids=winner_ids)
+
+        # Announce reroll
+        tag_line = " ".join(m.mention for m in winner_members) if winner_members else ""
+        try:
+            emb = self._results_embed(st, winners=winner_members, count=len(entries))
+            emb.title = f"{st.prize} [REROLL]"
+            await channel.send(content=tag_line, embed=emb)
+        except Exception:
+            pass
+
+        # DM + role
+        role = guild.get_role(WINNER_ROLE_ID)
+        for m in winner_members:
+            try:
+                await m.send(embed=self._winner_dm_embed(st))
             except Exception:
                 pass
             try:
-                role = guild.get_role(WINNER_ROLE_ID)
                 if role:
-                    await winner_member.add_roles(role, reason="Giveaway winnaar")
+                    await m.add_roles(role, reason="Giveaway reroll winnaar")
             except Exception:
                 pass
+        return True
 
     giveaway = app_commands.Group(name="giveaway", description="Giveaway commands (admins only)")
 
@@ -317,6 +490,7 @@ class Giveaway(commands.Cog):
         prijs="Bijv: 1000 V-Bucks",
         eindtijd="Bijv: 30m, 2h, 1d, 19:00 of 2026-01-12 19:00",
         kanaal="Kanaal waar de giveaway gepost wordt",
+        winners="Aantal winnaars (default: 1)",
         deelnemers="Max deelnemers (optioneel)",
         beschrijving="Extra tekst/omschrijving",
         afbeelding="Optionele afbeelding (thumbnail)"
@@ -325,9 +499,9 @@ class Giveaway(commands.Cog):
         self,
         interaction: discord.Interaction,
         prijs: str,
-        winners: int = 1,
         eindtijd: str,
         kanaal: discord.TextChannel,
+        winners: int = 1,
         deelnemers: Optional[int] = None,
         beschrijving: Optional[str] = None,
         afbeelding: Optional[discord.Attachment] = None,
@@ -342,6 +516,9 @@ class Giveaway(commands.Cog):
         except Exception as e:
             return await interaction.response.send_message(str(e), ephemeral=True)
 
+
+        if winners is None or winners < 1:
+            winners = 1
         if deelnemers is not None and deelnemers <= 0:
             deelnemers = None
 
@@ -386,6 +563,7 @@ class Giveaway(commands.Cog):
             end_at=end_at,
             created_by=interaction.user.id,
             thumbnail_name=thumb_name,
+            winners_count=int(winners),
         )
 
         # Update state + view to be persistent
@@ -399,15 +577,15 @@ class Giveaway(commands.Cog):
             end_at=end_at,
             max_participants=deelnemers,
             thumbnail_name=thumb_name,
+            winners_count=int(winners),
+            winner_ids_json=None,
         )
-        self.bot.add_view(ParticipateView(self, st))
+        self.bot.add_view(ParticipateView(self, st, ended=False))
 
         # Update message with the real state (button label)
         try:
-            v2 = ParticipateView(self, st)
-            for child in v2.children:
-                if isinstance(child, discord.ui.Button):
-                    child.label = "Participate (0)"
+            v2 = ParticipateView(self, st, ended=False)
+            v2.participate_btn.label = "Participate (0)"
             await msg.edit(embed=self._giveaway_embed(st, count=0), view=v2)
         except Exception:
             pass

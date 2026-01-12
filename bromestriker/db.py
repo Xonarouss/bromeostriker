@@ -1,6 +1,7 @@
 import sqlite3
 import time
 from typing import Optional, Iterable, Tuple, List
+import json
 
 class DB:
     def __init__(self, path: str):
@@ -72,13 +73,23 @@ class DB:
             end_at INTEGER NOT NULL,
             created_by INTEGER NOT NULL,
             thumbnail_name TEXT,
+            winners_count INTEGER NOT NULL DEFAULT 1,
             ended INTEGER NOT NULL DEFAULT 0,
-            winner_id INTEGER
+            winner_id INTEGER,
+            winner_ids TEXT
         );
         """)
         # lightweight migrations (ignore if already applied)
         try:
             cur.execute("ALTER TABLE giveaways ADD COLUMN max_participants INTEGER")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE giveaways ADD COLUMN winners_count INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE giveaways ADD COLUMN winner_ids TEXT")
         except Exception:
             pass
         cur.execute("""
@@ -231,14 +242,15 @@ class DB:
         end_at: int,
         created_by: int,
         thumbnail_name: str | None = None,
+        winners_count: int = 1,
     ) -> int:
         cur = self.conn.cursor()
         cur.execute(
             """
-            INSERT INTO giveaways (guild_id, channel_id, message_id, prize, description, max_participants, end_at, created_by, thumbnail_name, ended)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            """,
-            (guild_id, channel_id, message_id, prize, description, max_participants, end_at, created_by, thumbnail_name),
+            INSERT INTO giveaways (guild_id, channel_id, message_id, prize, description, max_participants, end_at, created_by, thumbnail_name, winners_count, ended)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """
+            (guild_id, channel_id, message_id, prize, description, max_participants, end_at, created_by, thumbnail_name, winners_count),
         )
         self.conn.commit()
         return int(cur.lastrowid)
@@ -278,10 +290,13 @@ class DB:
         cur.execute("SELECT user_id FROM giveaway_entries WHERE giveaway_id=?", (giveaway_id,))
         return [int(r["user_id"]) for r in cur.fetchall()]
 
-    def end_giveaway(self, giveaway_id: int, winner_id: int | None) -> None:
+    def end_giveaway(self, giveaway_id: int, *, winner_ids: list[int] | None) -> None:
+        """Mark giveaway ended and store winners (supports multiple winners)."""
         cur = self.conn.cursor()
+        winner_id = int(winner_ids[0]) if winner_ids else None
+        winner_ids_json = json.dumps([int(x) for x in winner_ids]) if winner_ids else None
         cur.execute(
-            "UPDATE giveaways SET ended=1, winner_id=? WHERE id=?",
-            (winner_id, giveaway_id),
+            "UPDATE giveaways SET ended=1, winner_id=?, winner_ids=? WHERE id=?",
+            (winner_id, winner_ids_json, giveaway_id),
         )
         self.conn.commit()
