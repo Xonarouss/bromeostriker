@@ -11,7 +11,8 @@ class DB:
 
     def _init(self) -> None:
         cur = self.conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
         CREATE TABLE IF NOT EXISTS warns (
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
@@ -249,10 +250,9 @@ class DB:
             """
             INSERT INTO giveaways (guild_id, channel_id, message_id, prize, description, max_participants, end_at, created_by, thumbnail_name, winners_count, ended)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            """
+            """,
             (guild_id, channel_id, message_id, prize, description, max_participants, end_at, created_by, thumbnail_name, winners_count),
-        )
-        self.conn.commit()
+        )self.conn.commit()
         return int(cur.lastrowid)
 
     def add_giveaway_entry(self, giveaway_id: int, user_id: int) -> bool:
