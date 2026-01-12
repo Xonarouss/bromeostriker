@@ -113,10 +113,7 @@ class BromeStriker(commands.Bot):
 
         # 3) Sync commands (guild sync = instant)
         guild = discord.Object(id=self.guild_id)
-        if "Counters" not in self.cogs:
-        await self.add_cog(Counters(self))
         self.tree.copy_global_to(guild=guild)
-        print("TREE COMMANDS:", [c.qualified_name for c in self.tree.get_commands()])
         await self.tree.sync(guild=guild)
         print(f"✅ Slash commands synced to guild={self.guild_id}")
 
