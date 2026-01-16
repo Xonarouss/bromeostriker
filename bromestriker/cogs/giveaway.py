@@ -43,6 +43,15 @@ def _can_create_giveaway(member: discord.Member) -> bool:
         return False
 
 
+
+
+def _row_get(row, key: str, default=None):
+    try:
+        return row[key]
+    except Exception:
+        return default
+
+
 def _parse_endtime(s: str) -> int:
     """Parse a human-ish duration/date string into a unix timestamp (seconds).
 
@@ -541,15 +550,15 @@ class Giveaway(commands.Cog):
         # Try to avoid previous winners if possible
         prev = []
         try:
-            if row.get("winner_ids"):
+            if _row_get(row, "winner_ids"):
                 prev = json.loads(row["winner_ids"]) or []
-            elif row.get("winner_id"):
+            elif _row_get(row, "winner_id"):
                 prev = [int(row["winner_id"]) ]
         except Exception:
             prev = []
         pool = [uid for uid in entries if uid not in prev] or entries
 
-        winners_count = int(row.get("winners_count") or 1)
+        winners_count = int(_row_get(row, "winners_count") or 1)
         k = min(max(1, winners_count), len(pool))
         winner_ids = random.sample(pool, k=k)
         winner_members: list[discord.Member] = []
@@ -587,6 +596,170 @@ class Giveaway(commands.Cog):
                 print('Giveaway watcher error:', repr(e))
         return True
 
+
+
+    # ---------------------
+    # Dashboard actions
+    # ---------------------
+    async def dashboard_create(
+        self,
+        *,
+        guild_id: int,
+        actor_user_id: int,
+        channel_id: int,
+        prize: str,
+        end_at: int | None = None,
+        end_in: str | None = None,
+        winners: int = 1,
+        description: str | None = None,
+        max_participants: int | None = None,
+    ) -> int:
+        """Create a giveaway from the web dashboard.
+
+        Provide either end_at (unix seconds) or end_in (same format as /giveaway maak, e.g. 30m/2h/19:00).
+        """
+        if end_at is None:
+            if not end_in:
+                raise ValueError('end_at or end_in required')
+            end_at = _parse_endtime(end_in)
+
+        guild = self.bot.get_guild(guild_id) or await self.bot.fetch_guild(guild_id)
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            ch = await self.bot.fetch_channel(channel_id)
+            channel = ch
+        if not isinstance(channel, discord.TextChannel):
+            raise ValueError('channel must be a text channel')
+
+        tmp_state = GiveawayState(
+            giveaway_id=0,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            message_id=0,
+            prize=prize,
+            description=description,
+            max_participants=max_participants,
+            end_at=int(end_at),
+            created_by=int(actor_user_id),
+            thumbnail_name=None,
+            winners_count=int(winners or 1),
+        )
+
+        view = ParticipateView(self, tmp_state, ended=False)
+        # send message first
+        msg = await channel.send(embed=self._giveaway_embed(tmp_state, count=0), view=view)
+
+        giveaway_id = self.bot.db.create_giveaway(
+            guild_id=guild_id,
+            channel_id=channel_id,
+            message_id=msg.id,
+            prize=prize,
+            description=description,
+            max_participants=max_participants,
+            end_at=int(end_at),
+            created_by=int(actor_user_id),
+            thumbnail_name=None,
+            winners_count=int(winners or 1),
+        )
+
+        # update state + message with correct state
+        tmp_state.giveaway_id = giveaway_id
+        tmp_state.message_id = msg.id
+        view.state = tmp_state
+        await msg.edit(embed=self._giveaway_embed(tmp_state, count=0), view=view)
+        return giveaway_id
+
+    async def dashboard_cancel(self, guild_id: int, giveaway_id: int, actor_user_id: int) -> bool:
+        row = self.bot.db.get_giveaway(giveaway_id)
+        if not row or int(row["ended"]) == 1:
+            return False
+        st = GiveawayState.from_row(row)
+        guild = self.bot.get_guild(guild_id) or await self.bot.fetch_guild(guild_id)
+        channel = guild.get_channel(st.channel_id) or await self.bot.fetch_channel(st.channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return False
+        # mark ended
+        self.bot.db.end_giveaway(giveaway_id, winner_ids=None)
+        # edit original message
+        try:
+            msg = await channel.fetch_message(st.message_id)
+        except Exception:
+            msg = None
+        if msg:
+            try:
+                count = self.bot.db.giveaway_entry_count(giveaway_id)
+                v = ParticipateView(self, st, ended=True)
+                v.reroll_btn.disabled = True
+                emb = self._giveaway_embed(st, count=count)
+                emb.title = f"{st.prize} [CANCELLED]"
+                emb.description = (emb.description or "") + "\n\n🛑 **Cancelled**"
+                await msg.edit(embed=emb, view=v)
+            except Exception as e:
+                print('Dashboard cancel error:', repr(e))
+        try:
+            await channel.send(f"🛑 Giveaway **{st.prize}** is gecanceld.")
+        except Exception:
+            pass
+        return True
+
+    async def dashboard_reroll(self, guild_id: int, giveaway_id: int, actor_user_id: int) -> bool:
+        row = self.bot.db.get_giveaway(giveaway_id)
+        if not row or int(row["ended"]) != 1:
+            return False
+        st = GiveawayState.from_row(row)
+        guild = self.bot.get_guild(guild_id) or await self.bot.fetch_guild(guild_id)
+        channel = guild.get_channel(st.channel_id) or await self.bot.fetch_channel(st.channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return False
+
+        entries = self.bot.db.get_giveaway_entries(giveaway_id)
+        if not entries:
+            return False
+
+        prev = []
+        try:
+            wids = _row_get(row, "winner_ids")
+            wid = _row_get(row, "winner_id")
+            if wids:
+                prev = json.loads(wids) or []
+            elif wid:
+                prev = [int(wid)]
+        except Exception:
+            prev = []
+        pool = [uid for uid in entries if uid not in prev] or entries
+
+        winners_count = int(_row_get(row, "winners_count", 1) or 1)
+        k = min(max(1, winners_count), len(pool))
+        winner_ids = random.sample(pool, k=k)
+        winner_members: list[discord.Member] = []
+        for uid in winner_ids:
+            try:
+                m = guild.get_member(uid) or await guild.fetch_member(uid)
+                if isinstance(m, discord.Member):
+                    winner_members.append(m)
+            except Exception:
+                pass
+
+        self.bot.db.end_giveaway(giveaway_id, winner_ids=winner_ids)
+        tag_line = " ".join(m.mention for m in winner_members) if winner_members else ""
+        try:
+            emb = self._results_embed(st, winners=winner_members, count=len(entries))
+            emb.title = f"{st.prize} [REROLL]"
+            await channel.send(content=tag_line, embed=emb)
+        except Exception:
+            pass
+        role = guild.get_role(WINNER_ROLE_ID)
+        for m in winner_members:
+            try:
+                await m.send(embed=self._winner_dm_embed(st))
+            except Exception:
+                pass
+            try:
+                if role:
+                    await m.add_roles(role, reason="Giveaway reroll winnaar")
+            except Exception:
+                pass
+        return True
     giveaway = app_commands.Group(name="giveaway", description="Giveaway commands (admins only)")
 
     @giveaway.command(name="maak", description="Maak een giveaway (admins only)")

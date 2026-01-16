@@ -836,5 +836,123 @@ class Music(commands.Cog):
         await interaction.response.send_message("👋 Losgekoppeld.", ephemeral=True)
 
 
+    # ---------------------
+    # Dashboard helpers
+    # ---------------------
+    def dashboard_status(self, guild_id: int) -> dict:
+        player = self._get_player(guild_id)
+        now = None
+        if player.current:
+            now = {
+                "title": player.current.title,
+                "webpage_url": player.current.webpage_url,
+                "volume": int(player.volume * 100),
+            }
+        # Snapshot queue (asyncio.Queue is not easily iterable; use _queue)
+        q = []
+        try:
+            for t in list(player.queue._queue)[:15]:  # type: ignore[attr-defined]
+                q.append({"title": t.title, "webpage_url": t.webpage_url})
+        except Exception:
+            q = []
+        vc = None
+        try:
+            g = self.bot.get_guild(guild_id)
+            vc = g.voice_client if g else None
+        except Exception:
+            vc = None
+        state = "idle"
+        if vc:
+            if vc.is_paused():
+                state = "paused"
+            elif vc.is_playing():
+                state = "playing"
+            else:
+                state = "connected"
+        return {"state": state, "now": now, "queue": q}
+
+    async def dashboard_action(self, guild_id: int, actor_user_id: int, payload: dict) -> None:
+        action = (payload.get("action") or "").strip().lower()
+        url = (payload.get("url") or "").strip()
+        g = self.bot.get_guild(guild_id)
+        if not g:
+            return
+        vc = g.voice_client
+        player = self._get_player(guild_id)
+        self._touch(guild_id)
+
+        if action in {"pause", "resume", "toggle"}:
+            if vc and vc.is_playing():
+                vc.pause();
+                player.paused_at = time.monotonic()
+            elif vc and vc.is_paused():
+                vc.resume();
+                if player.paused_at:
+                    player.paused_total += max(0.0, time.monotonic() - player.paused_at)
+                player.paused_at = None
+            return
+
+        if action == "skip":
+            if vc and (vc.is_playing() or vc.is_paused()):
+                vc.stop()
+            return
+
+        if action == "stop":
+            try:
+                while True:
+                    player.queue.get_nowait()
+            except Exception:
+                pass
+            player.current = None
+            player.current_audio = None
+            if vc:
+                vc.stop()
+            return
+
+        if action == "vol_up":
+            player.volume = min(1.0, player.volume + 0.1)
+            if player.current_audio:
+                player.current_audio.volume = player.volume
+            return
+
+        if action == "vol_down":
+            player.volume = max(0.0, player.volume - 0.1)
+            if player.current_audio:
+                player.current_audio.volume = player.volume
+            return
+
+        if action == "enqueue" and url:
+            # Enqueue a URL like /music speel does
+            # Use a fake interaction-less flow by extracting info and pushing to queue
+            track = await self._extract_track(url, requester_id=actor_user_id)
+            await player.queue.put(track)
+            if player._task is None or player._task.done():
+                player._task = asyncio.create_task(self._player_loop(guild_id))
+            return
+
+        if action == "playlist_add":
+            # Add current or a provided URL to the default playlist
+            pl_id = self.bot.db.get_or_create_playlist(guild_id, name="default", created_by=actor_user_id)
+            if player.current:
+                self.bot.db.add_playlist_track(pl_id, player.current.title, player.current.url, player.current.webpage_url, added_by=actor_user_id)
+                return
+            if url:
+                track = await self._extract_track(url, requester_id=actor_user_id)
+                self.bot.db.add_playlist_track(pl_id, track.title, track.url, track.webpage_url, added_by=actor_user_id)
+            return
+
+    async def _extract_track(self, query: str, requester_id: int | None = None) -> Track:
+        # Small helper for dashboard enqueue/playlist
+        loop = asyncio.get_event_loop()
+        ytdl = yt_dlp.YoutubeDL({**BASE_YTDL_OPTS, "ffmpeg_location": self.ffmpeg_path})
+        info = await loop.run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
+        if "entries" in info and isinstance(info["entries"], list) and info["entries"]:
+            info = info["entries"][0]
+        url = info.get("url") or query
+        title = info.get("title") or query
+        webpage_url = info.get("webpage_url") or query
+        return Track(title=title, url=url, webpage_url=webpage_url, duration=info.get("duration"), requester_id=requester_id)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(Music(bot))

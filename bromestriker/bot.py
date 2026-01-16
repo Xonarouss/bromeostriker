@@ -10,6 +10,10 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
+import uvicorn
+
+from .webserver import create_app
+
 from .db import DB
 from .cogs.music import Music
 from .cogs.weather import Weather
@@ -64,6 +68,7 @@ class BromeStriker(commands.Bot):
         intents = discord.Intents.default()
         intents.members = True  # needed for role ops
         intents.voice_states = True  # needed for muziek (voice)
+        intents.message_content = True  # fix warning + prefix commands
         super().__init__(command_prefix="!", intents=intents)
 
         self.guild_id = guild_id
@@ -118,6 +123,7 @@ class BromeStriker(commands.Bot):
         self.tree.add_command(purge_cmd)
         self.tree.add_command(kick_cmd)
         self.tree.add_command(ban_cmd)
+        self.tree.add_command(dashboard_cmd)
 
         # 3) Sync commands (guild sync = instant)
         guild = discord.Object(id=self.guild_id)
@@ -686,6 +692,25 @@ async def ban_cmd(
 
     return await interaction.followup.send(f"⛔ **{user}** is verbannen.", ephemeral=True)
 
+@app_commands.command(name="dashboard", description="Open het bot dashboard (B-Crew/Admin)")
+async def dashboard_cmd(interaction: discord.Interaction):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("❌ Alleen in een server.", ephemeral=True)
+
+    bcrew_id = int(os.getenv("B_CREW_ROLE_ID", "1027533834318774293") or "1027533834318774293")
+    is_admin = bool(interaction.user.guild_permissions.administrator)
+    is_bcrew = interaction.user.get_role(bcrew_id) is not None
+    if not (is_admin or is_bcrew):
+        return await interaction.response.send_message("❌ Geen toegang. Alleen B-Crew of Admin.", ephemeral=True)
+
+    base = (os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if not base:
+        return await interaction.response.send_message("⚠️ PUBLIC_BASE_URL is niet gezet in env.", ephemeral=True)
+
+    url = f"{base}/dashboard"
+    await interaction.response.send_message(f"🔗 Dashboard: {url}", ephemeral=True)
+
+
 def main() -> None:
     global bot
     load_dotenv()
@@ -702,6 +727,21 @@ def main() -> None:
     # Start OAuth web endpoints (TikTok) if enabled
     os.environ.setdefault("DB_PATH", db_path)
     # Webserver disabled in scraping-only build
-
     bot = BromeStriker(guild_id=guild_id, db_path=db_path, modlog_channel_id=modlog_id)
-    bot.run(token)
+
+    # Start FastAPI dashboard (and TikTok OAuth endpoints) alongside the bot
+    port = int(os.getenv("DASHBOARD_PORT", os.getenv("PORT", "8080")) or "8080")
+    app = create_app(bot)
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level=(os.getenv("UVICORN_LOG_LEVEL") or "info"))
+    server = uvicorn.Server(config)
+
+    async def _run_all():
+        await asyncio.gather(
+            bot.start(token),
+            server.serve(),
+        )
+
+    try:
+        asyncio.run(_run_all())
+    except KeyboardInterrupt:
+        pass

@@ -101,6 +101,30 @@ class DB:
             PRIMARY KEY (giveaway_id, user_id)
         );
         """)
+
+
+        # --- music playlists ---
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS playlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            created_by INTEGER,
+            created_at INTEGER NOT NULL,
+            UNIQUE(guild_id, name)
+        );
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS playlist_tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            playlist_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            url TEXT NOT NULL,
+            webpage_url TEXT,
+            added_by INTEGER,
+            added_at INTEGER NOT NULL
+        );
+        """)
         self.conn.commit()
 
         # Best-effort migration: older DBs won't have the counters table.
@@ -308,3 +332,23 @@ class DB:
             (winner_id, winner_ids_json, giveaway_id),
         )
         self.conn.commit()
+
+    # --- playlists ---
+    def get_or_create_playlist(self, guild_id: int, name: str = "default", created_by: int | None = None) -> int:
+        now = int(time.time())
+        cur = self.conn.cursor()
+        cur.execute("INSERT OR IGNORE INTO playlists (guild_id, name, created_by, created_at) VALUES (?, ?, ?, ?)", (guild_id, name, created_by, now))
+        self.conn.commit()
+        row = cur.execute("SELECT id FROM playlists WHERE guild_id=? AND name=?", (guild_id, name)).fetchone()
+        return int(row[0]) if row else 0
+
+    def add_playlist_track(self, playlist_id: int, title: str, url: str, webpage_url: str | None, added_by: int | None = None) -> int:
+        now = int(time.time())
+        cur = self.conn.cursor()
+        cur.execute("INSERT INTO playlist_tracks (playlist_id, title, url, webpage_url, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?)", (playlist_id, title, url, webpage_url, added_by, now))
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def list_playlist_tracks(self, playlist_id: int, limit: int = 100) -> List[sqlite3.Row]:
+        cur = self.conn.cursor()
+        return cur.execute("SELECT id, title, url, webpage_url, added_by, added_at FROM playlist_tracks WHERE playlist_id=? ORDER BY id DESC LIMIT ?", (playlist_id, int(limit))).fetchall()
