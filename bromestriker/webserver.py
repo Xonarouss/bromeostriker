@@ -484,7 +484,7 @@ def create_app(bot=None) -> FastAPI:
         <div className='grid'>
           <div className='card col6'>
             <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Now Playing</div>
-            <div className='muted'>{st?.now || '—'}</div>
+            <div className='muted'>{(st && st.now) ? st.now : '—'}</div>
             <div className='row' style={{marginTop:12}}>
               <button className='btn' onClick={()=>act('pause_resume')}>⏯️</button>
               <button className='btn primary' onClick={()=>act('skip')}>⏭️ Skip</button>
@@ -500,8 +500,7 @@ def create_app(bot=None) -> FastAPI:
           </div>
           <div className='card col6'>
             <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Queue</div>
-            <div className='muted' style={{whiteSpace:'pre-wrap'}}>{(st?.queue||[]).join('
-') || '—'}</div>
+            <div className='muted' style={{whiteSpace:'pre-wrap'}}>{((st && st.queue) ? st.queue : []).join('\n') || '—'}</div>
             <div className='row' style={{marginTop:12}}>
               <button className='btn' onClick={()=>act('play_playlist')}>▶️ Play playlist</button>
               <button className='btn danger' onClick={()=>act('clear_playlist')}>🧹 Clear playlist</button>
