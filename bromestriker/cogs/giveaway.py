@@ -182,7 +182,7 @@ class ParticipateView(discord.ui.View):
         # Update message participant count
         count = self.cog.bot.db.giveaway_entry_count(self.state.giveaway_id)
         try:
-            self.participate_btn.label = f"Deelnemers ({count})"
+            self.participate_btn.label = f"Deelnemen ({count})"
         except Exception:
             pass
 

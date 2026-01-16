@@ -190,7 +190,7 @@ async def refresh_tiktok_access_token_if_needed() -> Optional[str]:
 
 
 def create_app(bot=None) -> FastAPI:
-    app = FastAPI(title="BromeoStriker OAuth")
+    app = FastAPI(title="BromeStriker OAuth")
 
 
     # -----------------------------
@@ -331,11 +331,17 @@ def create_app(bot=None) -> FastAPI:
         user_id = int(me_js.get("id"))
         session = _make_session(user_id)
         resp = RedirectResponse(url="/dashboard")
+        # Secure cookies are only stored by browsers over HTTPS.
+        # During initial setup you might access the dashboard over plain HTTP
+        # (e.g., when TLS isn't ready yet). In that case, force secure=False
+        # so login sessions actually persist.
+        base_url = (os.getenv("PUBLIC_BASE_URL") or "").strip().lower()
+        cookie_secure = base_url.startswith("https://")
         resp.set_cookie(
             "bs_session",
             session,
             httponly=True,
-            secure=True,
+            secure=cookie_secure,
             samesite="lax",
             max_age=7*24*3600,
         )
@@ -352,7 +358,7 @@ def create_app(bot=None) -> FastAPI:
 <head>
   <meta charset='utf-8' />
   <meta name='viewport' content='width=device-width, initial-scale=1' />
-  <title>BromeoStriker Dashboard</title>
+  <title>BromeStriker Dashboard</title>
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
@@ -381,7 +387,7 @@ def create_app(bot=None) -> FastAPI:
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel">
+  <script type="text/babel" data-presets="react">
     const {useEffect, useMemo, useState} = React;
 
     async function api(path, opts={}){
@@ -436,7 +442,7 @@ def create_app(bot=None) -> FastAPI:
       }
 
       return (
-        <>
+        <div>
           <div className='top'>
             <div className='brand'>BromeStriker Dashboard</div>
             <div className='row'>
@@ -456,7 +462,7 @@ def create_app(bot=None) -> FastAPI:
             {tab==='warns' && <Warns setErr={setErr} />}
             {tab==='mutes' && <Mutes setErr={setErr} />}
           </div>
-        </>
+        </div>
       );
     }
 
