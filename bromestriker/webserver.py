@@ -962,18 +962,17 @@ def create_app(bot=None) -> FastAPI:
     return app
 
 
-def start_webserver_in_thread() -> None:
+def start_webserver_in_thread(bot) -> None:
     """Starts FastAPI (uvicorn) in a daemon thread if enabled."""
     if (os.getenv("TIKTOK_OAUTH_ENABLED") or "1").strip() not in ("1", "true", "True", "yes", "YES"):
         return
 
-    # If user hasn't configured TikTok, still start /health for convenience.
     port = int(os.getenv("WEB_PORT") or os.getenv("PORT") or "8080")
     host = (os.getenv("WEB_HOST") or "0.0.0.0").strip()
 
     import uvicorn
 
-    app = create_app()
+    app = create_app(bot=bot)  # <--- DIT is de belangrijke
 
     def _run():
         uvicorn.run(app, host=host, port=port, log_level="info")
