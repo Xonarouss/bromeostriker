@@ -321,7 +321,9 @@ class Giveaway(commands.Cog):
         )
 
     def _giveaway_embed(self, st: GiveawayState, *, count: int) -> discord.Embed:
-        end_dt = dt.datetime.fromtimestamp(st.end_at)
+        # Use Discord's native timestamp formatting so it auto-localizes per user.
+        # :F = full date/time, :R = relative time (e.g. "in 2 hours").
+        end_value = f"<t:{st.end_at}:F>\n(<t:{st.end_at}:R>)"
         e = discord.Embed(
             title=f"{st.prize}",
             description=(st.description or ""),
