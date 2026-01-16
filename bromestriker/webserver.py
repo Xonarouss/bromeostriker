@@ -190,7 +190,7 @@ async def refresh_tiktok_access_token_if_needed() -> Optional[str]:
 
 
 def create_app(bot=None) -> FastAPI:
-    app = FastAPI(title="BromeStriker OAuth")
+    app = FastAPI(title="BromeoStriker OAuth")
 
 
     # -----------------------------
@@ -352,7 +352,7 @@ def create_app(bot=None) -> FastAPI:
 <head>
   <meta charset='utf-8' />
   <meta name='viewport' content='width=device-width, initial-scale=1' />
-  <title>BromeStriker Dashboard</title>
+  <title>BromeoStriker Dashboard</title>
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
