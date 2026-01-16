@@ -116,7 +116,7 @@ class ParticipateView(discord.ui.View):
 
         # Persistent buttons need stable custom_id
         self.participate_btn = discord.ui.Button(
-            label="Meedoen",
+            label="Deelnemen",
             style=discord.ButtonStyle.primary,
             emoji="🎉",
             custom_id=f"giveaway_participate:{state.giveaway_id}",
@@ -182,7 +182,7 @@ class ParticipateView(discord.ui.View):
         # Update message participant count
         count = self.cog.bot.db.giveaway_entry_count(self.state.giveaway_id)
         try:
-            self.participate_btn.label = f"Meedoen ({count})"
+            self.participate_btn.label = f"Deelnemen ({count})"
         except Exception:
             pass
 
@@ -226,7 +226,7 @@ class ParticipateView(discord.ui.View):
 
         count = self.cog.bot.db.giveaway_entry_count(self.state.giveaway_id)
         try:
-            self.participate_btn.label = f"Meedoen ({count})"
+            self.participate_btn.label = f"Deelnemen ({count})"
         except Exception:
             pass
 
@@ -440,7 +440,7 @@ class Giveaway(commands.Cog):
             try:
                 v = ParticipateView(self, st, ended=True)
                 try:
-                    v.participate_btn.label = f"Meedoen ({count})"
+                    v.participate_btn.label = f"Deelnemen ({count})"
                 except Exception:
                     pass
                 await msg.edit(embed=self._giveaway_embed(st, count=count), view=v)
@@ -867,7 +867,7 @@ class Giveaway(commands.Cog):
         # Update message with the real state (button label)
         try:
             v2 = ParticipateView(self, st, ended=False)
-            v2.participate_btn.label = "Participate (0)"
+            v2.participate_btn.label = "Deelnemen (0)"
             await msg.edit(embed=self._giveaway_embed(st, count=0), view=v2)
         except Exception:
             pass
