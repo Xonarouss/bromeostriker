@@ -253,8 +253,8 @@ class ParticipateView(discord.ui.View):
     async def _on_cancel(self, interaction: discord.Interaction):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return await interaction.response.send_message("Dit werkt alleen in een server.", ephemeral=True)
-        if not _is_admin(interaction.user):
-            return await interaction.response.send_message("Alleen admins kunnen een giveaway cancellen.", ephemeral=True)
+        if not _can_manage_giveaway(interaction.user):
+            return await interaction.response.send_message("Alleen admins of B-Crew kunnen een giveaway cancellen.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         responded = False
         ok = await self.cog._cancel_giveaway(self.state, interaction=interaction)
@@ -266,8 +266,8 @@ class ParticipateView(discord.ui.View):
     async def _on_reroll(self, interaction: discord.Interaction):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return await interaction.response.send_message("Dit werkt alleen in een server.", ephemeral=True)
-        if not _is_admin(interaction.user):
-            return await interaction.response.send_message("Alleen admins kunnen rerollen.", ephemeral=True)
+        if not _can_manage_giveaway(interaction.user):
+            return await interaction.response.send_message("Alleen admins of B-Crew kunnen rerollen.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         responded = False
         ok = await self.cog._reroll_giveaway(self.state, interaction=interaction)

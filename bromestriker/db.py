@@ -267,6 +267,13 @@ class DB:
         self.conn.commit()
         return cur.rowcount > 0
 
+
+    def remove_giveaway_entry(self, giveaway_id: int, user_id: int) -> bool:
+        """Returns True if the entry existed and was removed."""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM giveaway_entries WHERE giveaway_id=? AND user_id=?", (giveaway_id, user_id))
+        self.conn.commit()
+        return cur.rowcount > 0
     def giveaway_entry_count(self, giveaway_id: int) -> int:
         cur = self.conn.cursor()
         cur.execute("SELECT COUNT(1) AS c FROM giveaway_entries WHERE giveaway_id=?", (giveaway_id,))
