@@ -580,10 +580,12 @@ def create_app(bot=None) -> FastAPI:
       const send = async()=>{
         setErr('');
         try{
+          // IMPORTANT: Discord snowflake IDs exceed JS safe integer range.
+          // Send as string to avoid precision loss ("Channel not found" errors).
           await api('/api/messages/send', {
             method:'POST',
             body: JSON.stringify({
-              channel_id: Number(channelId),
+              channel_id: String(channelId),
               content,
               embed: {
                 ...embed,
@@ -902,7 +904,12 @@ def create_app(bot=None) -> FastAPI:
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
-        channel_id = int(body.get("channel_id") or 0)
+        # Channel IDs are Discord snowflakes; the frontend sends them as strings
+        # to avoid JS precision loss.
+        try:
+            channel_id = int(str(body.get("channel_id") or "0"))
+        except Exception:
+            channel_id = 0
         content = (body.get("content") or "").rstrip()
         embed_in = body.get("embed") or None
         if not channel_id:
