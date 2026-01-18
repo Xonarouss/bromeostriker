@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 import threading
 
 import httpx
+import discord
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi import FastAPI, Request
@@ -1073,10 +1074,7 @@ def create_app(bot=None) -> FastAPI:
         username = str(uid)
         if guild is not None:
             try:
-                try:
-            member = guild.get_member(uid) or await guild.fetch_member(uid)
-        except Exception:
-            return _error(400, 'Gebruiker niet gevonden in server')
+                member = guild.get_member(uid) or await guild.fetch_member(uid)
                 username = f"{member.name}#{member.discriminator}" if getattr(member, "discriminator", None) else member.name
                 allowed = bool(getattr(member.guild_permissions, "administrator", False)) or (member.get_role(_bcrew_role_id()) is not None)
             except Exception:
