@@ -458,6 +458,17 @@ def create_app(bot=None) -> FastAPI:
 
       useEffect(()=>{ loadMe(); },[]);
 
+      // IMPORTANT: Hooks must be called in the same order on every render.
+      // So we always register this effect, and guard inside.
+      useEffect(()=>{
+        if(!me || (me && me.allowed === false)) return;
+        const fmt = new Intl.DateTimeFormat('nl-NL', { timeZone:'Europe/Amsterdam', hour:'2-digit', minute:'2-digit', second:'2-digit', day:'2-digit', month:'2-digit', year:'numeric' });
+        const tick = ()=>setNowNl(fmt.format(new Date()));
+        tick();
+        const t = setInterval(tick, 1000);
+        return ()=>clearInterval(t);
+      },[me]);
+
       if(!me){
         return (
           <div className='wrap'>
@@ -487,14 +498,6 @@ def create_app(bot=None) -> FastAPI:
           </div>
         );
       }
-
-      useEffect(()=>{
-        const fmt = new Intl.DateTimeFormat('nl-NL', { timeZone:'Europe/Amsterdam', hour:'2-digit', minute:'2-digit', second:'2-digit', day:'2-digit', month:'2-digit', year:'numeric' });
-        const tick = ()=>setNowNl(fmt.format(new Date()));
-        tick();
-        const t = setInterval(tick, 1000);
-        return ()=>clearInterval(t);
-      },[]);
 
       const NAV = [
         {k:'music', label:'Muziek'},
