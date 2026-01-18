@@ -124,7 +124,6 @@ class BromeStriker(commands.Bot):
         self.tree.add_command(kick_cmd)
         self.tree.add_command(ban_cmd)
         self.tree.add_command(dashboard_cmd)
-        self.tree.add_command(schieten_cmd)
 
         # 3) Sync commands (guild sync = instant)
         guild = discord.Object(id=self.guild_id)
@@ -692,41 +691,6 @@ async def ban_cmd(
     await bot._send_modlog(guild, emb)
 
     return await interaction.followup.send(f"⛔ **{user}** is verbannen.", ephemeral=True)
-
-
-# --- Lumiastream "schieten" command ---
-SHOOT_ROLE_IDS = {1027533834318774293, 991659558328094830, 991658526155997184}
-SHOOT_WEBHOOK_BASE = "https://api.lumiastream.com/api/wh/bromeolive/schiet"
-
-@app_commands.command(name="schieten", description="Schiet ballen op Bromeo (alleen B-CREW/B-VIP/Bromeo)")
-@app_commands.describe(richting="Kies waar je wil schieten")
-@app_commands.choices(richting=[
-    app_commands.Choice(name="links", value="links"),
-    app_commands.Choice(name="linksvoor", value="linksvoor"),
-    app_commands.Choice(name="rechts", value="rechts"),
-    app_commands.Choice(name="rechtsvoor", value="rechtsvoor"),
-    app_commands.Choice(name="alles", value="alles"),
-])
-async def schieten_cmd(interaction: discord.Interaction, richting: app_commands.Choice[str]):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
-        return await interaction.response.send_message("❌ Alleen in een server.", ephemeral=True)
-
-    member: discord.Member = interaction.user
-    allowed = any(r.id in SHOOT_ROLE_IDS for r in member.roles)
-    if not allowed:
-        return await interaction.response.send_message("❌ Geen toegang. Alleen B-CREW, B-VIP of Bromeo.", ephemeral=True)
-
-    url = f"{SHOOT_WEBHOOK_BASE}{richting.value}"
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(url)
-            if r.status_code >= 400:
-                return await interaction.response.send_message(f"❌ Webhook fout ({r.status_code}).", ephemeral=True)
-    except Exception as e:
-        return await interaction.response.send_message(f"❌ Webhook mislukt: {e}", ephemeral=True)
-
-    return await interaction.response.send_message(f"✅ Geschoten: **{richting.value}**", ephemeral=True)
 
 @app_commands.command(name="dashboard", description="Open het bot dashboard (B-Crew/Admin)")
 async def dashboard_cmd(interaction: discord.Interaction):

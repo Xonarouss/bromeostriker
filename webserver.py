@@ -3,12 +3,12 @@ import time
 import sqlite3
 import secrets
 import hashlib
-import json
 from typing import Optional, Dict, Any
 from urllib.parse import urlencode
 import threading
 
 import httpx
+import discord
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi import FastAPI, Request
@@ -391,50 +391,44 @@ def create_app(bot=None) -> FastAPI:
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
   <style>
-    :root{--bg:#0b1220;--panel:#0f172a;--panel2:#0b1220;--border:#1f2937;--text:#e5e7eb;--muted:#94a3b8;--accent:#16a34a;}
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:0; background:radial-gradient(1200px 600px at 30% -10%, rgba(22,163,74,.18), transparent 60%), var(--bg); color:var(--text);} 
-    .layout{display:flex;min-height:100vh}
-    .sidebar{width:240px;position:sticky;top:0;height:100vh;border-right:1px solid var(--border);background:linear-gradient(180deg, rgba(15,23,42,.9), rgba(15,23,42,.65));padding:16px}
-    .sidebrand{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-    .sidebrand img{width:34px;height:34px;border-radius:10px}
-    .sidebrand .t{font-weight:900;letter-spacing:.2px}
-    .nav{display:flex;flex-direction:column;gap:8px}
-    .navitem{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;border:1px solid transparent;background:transparent;cursor:pointer;color:var(--text)}
-    .navitem:hover{background:rgba(148,163,184,.08);border-color:rgba(148,163,184,.12)}
-    .navitem.active{background:rgba(22,163,74,.14);border-color:rgba(22,163,74,.25)}
-    .main{flex:1;min-width:0}
-    .top{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border);background:rgba(11,18,32,.85);backdrop-filter:blur(10px);position:sticky;top:0;z-index:10}
-    .brand{font-weight:900;letter-spacing:0.2px}
-    .btn{background:#111827;border:1px solid #334155;color:var(--text);padding:8px 12px;border-radius:12px;cursor:pointer}
-    .btn.primary{background:var(--accent);border-color:var(--accent);color:#04120a;font-weight:800}
-    .btn.ghost{background:transparent;border-color:rgba(148,163,184,.18)}
-    .wrap{max-width:1150px;margin:0 auto;padding:18px}
-    .card{background:linear-gradient(180deg, rgba(15,23,42,.96), rgba(15,23,42,.78));border:1px solid var(--border);border-radius:18px;padding:16px;margin-bottom:12px;box-shadow:0 18px 45px rgba(0,0,0,.28)}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:0; background:#0b1220; color:#e5e7eb;}
+    .top{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #1f2937;background:#0b1220;position:sticky;top:0}
+    .brand{font-weight:700;letter-spacing:0.3px}
+    .btn{background:#111827;border:1px solid #334155;color:#e5e7eb;padding:8px 12px;border-radius:10px;cursor:pointer}
+    .btn.primary{background:#16a34a;border-color:#16a34a;color:#04120a}
+    .wrap{max-width:1100px;margin:0 auto;padding:18px}
+    .tabs{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+    .tab{padding:8px 12px;border-radius:999px;border:1px solid #334155;background:#0f172a;cursor:pointer}
+    .tab.active{background:#16a34a;border-color:#16a34a;color:#04120a}
+    .card{background:#0f172a;border:1px solid #1f2937;border-radius:16px;padding:14px;margin-bottom:12px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
     .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
     .col6{grid-column:span 6}
     .col12{grid-column:span 12}
-    input,select,textarea{width:100%;padding:10px 12px;border-radius:14px;border:1px solid #334155;background:rgba(11,18,32,.8);color:var(--text)}
+    input,select,textarea{width:100%;padding:10px 12px;border-radius:12px;border:1px solid #334155;background:#0b1220;color:#e5e7eb}
     .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .muted{color:var(--muted)}
+    .muted{color:#94a3b8}
     .danger{border-color:#ef4444}
     .btn.danger{background:#ef4444;border-color:#ef4444;color:#0b1220}
     a{color:#22c55e}
-    .seg{display:flex;gap:8px}
-    .segBtn{padding:8px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.2);background:transparent;cursor:pointer;color:var(--text)}
-    .segBtn.on{background:rgba(22,163,74,.14);border-color:rgba(22,163,74,.25)}
-    .stations{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
-    .station{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:12px;border-radius:16px;border:1px solid rgba(148,163,184,.16);background:rgba(11,18,32,.35)}
-    .stationL{display:flex;gap:10px;align-items:center;min-width:0}
-    .stationLogo{width:34px;height:34px;border-radius:10px;object-fit:contain;background:rgba(148,163,184,.08);padding:6px}
-    .stationName{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .footer{margin-top:16px;padding:14px 0;color:var(--muted);font-size:13px;text-align:center}
-    @media (max-width: 980px){.sidebar{display:none}.col6{grid-column:span 12}.wrap{padding:14px}}
+    @media (max-width: 900px){.col6{grid-column:span 12}}
   </style>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel" data-presets="react">
     const {useEffect, useMemo, useState} = React;
+
+    const TAB_LABELS = {
+      music: 'Muziek',
+      messages: 'Berichten',
+      giveaways: 'Giveaways',
+      strikes: 'Strikes',
+      counters: 'Counters',
+      warns: 'Waarschuwingen',
+      mutes: 'Mutes',
+      bans: 'Bans'
+    };
+
 
     async function api(path, opts={}){
       const r = await fetch(path, {credentials:'include', headers:{'Content-Type':'application/json', ...(opts.headers||{})}, ...opts});
@@ -449,7 +443,7 @@ def create_app(bot=None) -> FastAPI:
       const [me, setMe] = useState(null);
       const [tab, setTab] = useState('music');
       const [err, setErr] = useState('');
-      const [nowNl, setNowNl] = useState('');
+      const [timeNL, setTimeNL] = useState('');
 
       const loadMe = async()=>{
         setErr('');
@@ -457,6 +451,14 @@ def create_app(bot=None) -> FastAPI:
       };
 
       useEffect(()=>{ loadMe(); },[]);
+
+      useEffect(()=>{
+        const fmt = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', weekday:'short', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        const tick = ()=> setTimeNL(fmt.format(new Date()));
+        tick();
+        const id = setInterval(tick, 1000);
+        return ()=>clearInterval(id);
+      },[]);
 
       if(!me){
         return (
@@ -481,71 +483,71 @@ def create_app(bot=None) -> FastAPI:
               <div style={{fontSize:20,fontWeight:800}}>Geen toegang</div>
               <div className='muted'>Alleen B-Crew of Discord Admin mag dit dashboard gebruiken.</div>
               <div className='row' style={{marginTop:10}}>
-                <a className='btn' href='/logout'>Logout</a>
+                <a className='btn' href='/logout'>Uitloggen</a>
               </div>
             </div>
           </div>
         );
       }
 
-      useEffect(()=>{
-        const fmt = new Intl.DateTimeFormat('nl-NL', { timeZone:'Europe/Amsterdam', hour:'2-digit', minute:'2-digit', second:'2-digit', day:'2-digit', month:'2-digit', year:'numeric' });
-        const tick = ()=>setNowNl(fmt.format(new Date()));
-        tick();
-        const t = setInterval(tick, 1000);
-        return ()=>clearInterval(t);
-      },[]);
-
-      const NAV = [
-        {k:'music', label:'Muziek'},
-        {k:'messages', label:'Berichten'},
-        {k:'giveaways', label:'Giveaways'},
-        {k:'strikes', label:'Strikes'},
-        {k:'counters', label:'Counters'},
-        {k:'warns', label:'Warns'},
-        {k:'mutes', label:'Mutes'},
-      ];
-
       return (
-        <div className='layout'>
-          <div className='sidebar'>
-            <div className='sidebrand'>
-              <img src='/static/logo.png' alt='logo'/>
-              <div>
-                <div className='t'>BromeoStriker</div>
-                <div className='muted' style={{fontSize:12}}>Dashboard</div>
-              </div>
+        <div>
+          <div className='top'>
+            <div className='row' style={{gap:14}}>
+              <div className='muted' style={{minWidth:170}}>{timeNL}</div>
+              <div className='brand'>BromeoStriker Dashboard</div>
             </div>
-            <div className='nav'>
-              {NAV.map(it=> (
-                <div key={it.k} className={'navitem '+(tab===it.k?'active':'')} onClick={()=>setTab(it.k)}>
-                  <div style={{fontWeight:800}}>{it.label}</div>
-                </div>
-              ))}
+            <div className='row'>
+              <div className='muted'>Ingelogd als {me.username}</div>
+              <a className='btn' href='/logout'>Uitloggen</a>
             </div>
           </div>
-          <div className='main'>
-            <div className='top'>
-              <div className='row'>
-                <div className='brand'>BromeoStriker Dashboard</div>
-                <div className='muted' style={{marginLeft:10}}>{nowNl}</div>
-              </div>
-              <div className='row'>
-                <div className='muted'>Ingelogd als {me.username}</div>
-                <a className='btn' href='/logout'>Logout</a>
-              </div>
+          <div className='wrap'>
+            <div className='tabs'>
+              {(() => {
+  const L={music:'Muziek',messages:'Berichten',giveaways:'Giveaways',strikes:'Strikes',counters:'Tellers',warns:'Waarschuwingen',mutes:'Mutes',bans:'Bans'};
+  return ['music','messages','giveaways','strikes','counters','warns','mutes','bans'].map(k=> (
+    <div key={k} className={'tab '+(tab===k?'active':'')} onClick={()=>setTab(k)}>{L[k]||k}</div>
+  ));
+})()}
             </div>
-            <div className='wrap'>
-              {err && <div className='card danger'>❌ {err}</div>}
-              {tab==='music' && <Music setErr={setErr} />}
-              {tab==='messages' && <Messages setErr={setErr} />}
-              {tab==='giveaways' && <Giveaways setErr={setErr} />}
-              {tab==='strikes' && <Strikes setErr={setErr} />}
-              {tab==='counters' && <Counters setErr={setErr} />}
-              {tab==='warns' && <Warns setErr={setErr} />}
-              {tab==='mutes' && <Mutes setErr={setErr} />}
-              <div className='footer'>Made with ❤️ by <a href='https://xonarous.nl' target='_blank' rel='noreferrer'>Xonarous</a></div>
+            {err && <div className='card danger'>❌ {err}</div>}
+            {tab==='music' && <Music setErr={setErr} />}
+            {tab==='messages' && <Berichten setErr={setErr} />}
+            {tab==='giveaways' && <Giveaways setErr={setErr} />}
+            {tab==='strikes' && <Strikes setErr={setErr} />}
+            {tab==='counters' && <Counters setErr={setErr} />}
+            {tab==='warns' && <Warns setErr={setErr} />}
+            {tab==='mutes' && <Mutes setErr={setErr} />}
+            {tab==='bans' && <Bans setErr={setErr} />}
+          </div>
+            <div style={{marginTop:18, paddingTop:14, borderTop:'1px solid #1f2937', textAlign:'center'}} className='muted'>
+              Made with ❤️ by <a href='https://xonarous.nl' target='_blank' rel='noreferrer'>Xonarous</a>
             </div>
+        </div>
+      );
+    }
+
+    
+
+    function Bans({setErr}){
+      const [items, setItems] = useState([]);
+      const load = async()=>{ setErr(''); try{ setItems((await api('/api/bans')).items||[]); }catch(e){ setErr(e.message); } };
+      useEffect(()=>{ load(); },[]);
+      return (
+        <div className='card'>
+          <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Bans</div>
+          <div className='muted' style={{marginBottom:10}}>Overzicht van recent opgehaalde bans (max 200).</div>
+          <div className='row' style={{justifyContent:'space-between', marginBottom:10}}>
+            <button className='btn' onClick={load}>↻ Vernieuwen</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {(items||[]).length===0 ? <div className='muted'>Geen bans gevonden.</div> : (items||[]).map((b,i)=>(
+              <div key={i} className='card' style={{margin:0, padding:12, background:'#0b1220'}}>
+                <div style={{fontWeight:800}}>{b.user_tag || b.user_id}</div>
+                <div className='muted'>Reden: {b.reason || '—'}</div>
+              </div>
+            ))}
           </div>
         </div>
       );
@@ -554,32 +556,30 @@ def create_app(bot=None) -> FastAPI:
     function Music({setErr}){
       const [st, setSt] = useState(null);
       const [url, setUrl] = useState('');
-      const [mode, setMode] = useState('url');
-      const [stations, setStations] = useState([]);
+      const [voiceChannels, setSpraakkanaalChannels] = useState([]);
+      const [voiceId, setSpraakkanaalId] = useState('');
       const load = async()=>{
         setErr('');
         try{ setSt(await api('/api/music/status')); }catch(e){ setErr(e.message); }
       };
-      useEffect(()=>{ load(); const t=setInterval(load, 4000); return ()=>clearInterval(t); },[]);
+      const loadSpraakkanaal = async()=>{
+        try{
+          const r = await api('/api/voice_channels');
+          setSpraakkanaalChannels(r.items||[]);
+          if(!voiceId && (r.items||[]).length) setSpraakkanaalId(String(r.items[0].id));
+        }catch(e){}
+      };
+      useEffect(()=>{ load(); loadSpraakkanaal(); const t=setInterval(load, 4000); return ()=>clearInterval(t); },[]);
 
       const act = async(action, payload={})=>{
         setErr('');
         try{ await api('/api/music/action', {method:'POST', body: JSON.stringify({action, ...payload})}); await load(); }catch(e){ setErr(e.message); }
       };
 
-      const loadStations = async()=>{
-        setErr('');
-        try{
-          const r = await api('/api/radio/stations');
-          setStations((r && r.stations) ? r.stations : []);
-        }catch(e){ /* radio is optional */ }
-      };
-      useEffect(()=>{ loadStations(); },[]);
-
       return (
         <div className='grid'>
           <div className='card col6'>
-            <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Now Playing</div>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Nu bezig</div>
             <div className='muted'>
               {(st && st.now && (typeof st.now === 'object')) ? (
                 <a href={st.now.webpage_url || '#'} target='_blank' rel='noreferrer'>
@@ -589,41 +589,30 @@ def create_app(bot=None) -> FastAPI:
             </div>
             <div className='row' style={{marginTop:12}}>
               <button className='btn' onClick={()=>act('pause_resume')}>⏯️</button>
-              <button className='btn primary' onClick={()=>act('skip')}>⏭️ Skip</button>
+              <button className='btn primary' onClick={()=>act('skip')}>⏭️ Overslaan</button>
               <button className='btn' onClick={()=>act('stop')}>⏹️ Stop</button>
               <button className='btn' onClick={()=>act('vol_down')}>🔉</button>
               <button className='btn' onClick={()=>act('vol_up')}>🔊</button>
             </div>
-            <div style={{marginTop:14}}>
-              <div className='row' style={{justifyContent:'space-between',marginBottom:10}}>
-                <div className='seg'>
-                  <button className={'segBtn '+(mode==='url'?'on':'')} onClick={()=>setMode('url')}>YouTube / URL</button>
-                  <button className={'segBtn '+(mode==='radio'?'on':'')} onClick={()=>setMode('radio')}>Radio</button>
-                </div>
-              </div>
-              {mode==='url' ? (
-                <div className='row'>
-                  <input placeholder='YouTube link, livestream of zoekterm…' value={url} onChange={e=>setUrl(e.target.value)} />
-                  <button className='btn primary' onClick={()=>{ if(!url.trim()) return; act('play', {query:url}); }}>▶️ Play</button>
-                  <button className='btn' onClick={()=>{ if(!url.trim()) return; act('add_playlist', {query:url}); }}>➕ Playlist</button>
-                </div>
-              ) : (
-                <div className='stations'>
-                  {stations.length ? stations.map(s=> (
-                    <div className='station' key={s.id}>
-                      <div className='stationL'>
-                        {s.logo_url ? <img className='stationLogo' src={s.logo_url} alt={s.name}/> : <div className='stationLogo' />}
-                        <div className='stationName' title={s.name}>{s.name}</div>
-                      </div>
-                      <button className='btn primary' onClick={()=>act('radio_play', {station_id: String(s.id)})}>Afspelen</button>
-                    </div>
-                  )) : <div className='muted'>Geen radiozenders ingesteld.</div>}
-                </div>
-              )}
+            <div className='row' style={{marginTop:14}}>
+              <input placeholder='YouTube-link of zoekterm…' value={url} onChange={e=>setUrl(e.target.value)} />
+              <button className='btn primary' onClick={()=>act('play', {query:url})}>▶️ Afspelen</button>
+              <button className='btn' onClick={()=>act('add_playlist', {query:url})}>➕ Afspeellijst</button>
+            </div>
+
+            <div style={{marginTop:14, fontWeight:800}}>Spraakkanaal</div>
+            <div className='row' style={{marginTop:8}}>
+              <select value={voiceId} onChange={e=>setSpraakkanaalId(e.target.value)}>
+                {voiceChannels.map(c=> <option key={c.id} value={c.id}>{c.name}</option>)
+                }
+              </select>
+              <button className='btn' onClick={()=>act('join', {channel_id: String(voiceId)})}>Verbinden</button>
+              <button className='btn danger' onClick={()=>act('disconnect')}>Loskoppelen</button>
+              <button className='btn' onClick={loadSpraakkanaal}>↻</button>
             </div>
           </div>
           <div className='card col6'>
-            <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Queue</div>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Wachtrij</div>
             <div className='muted' style={{whiteSpace:'pre-wrap'}}>
               {(() => {
                 const q = (st && Array.isArray(st.queue)) ? st.queue : [];
@@ -641,7 +630,7 @@ def create_app(bot=None) -> FastAPI:
               })()}
             </div>
             <div className='row' style={{marginTop:12}}>
-              <button className='btn' onClick={()=>act('play_playlist')}>▶️ Play playlist</button>
+              <button className='btn' onClick={()=>act('play_playlist')}>▶️ Afspelen playlist</button>
               <button className='btn danger' onClick={()=>act('clear_playlist')}>🧹 Clear playlist</button>
             </div>
           </div>
@@ -649,7 +638,7 @@ def create_app(bot=None) -> FastAPI:
       );
     }
 
-    function Messages({setErr}){
+    function Berichten({setErr}){
       const [channels, setChannels] = useState([]);
       const [channelId, setChannelId] = useState('');
       const [content, setContent] = useState('');
@@ -668,6 +657,8 @@ def create_app(bot=None) -> FastAPI:
       const send = async()=>{
         setErr('');
         try{
+          // IMPORTANT: Discord snowflake IDs exceed JS safe integer range.
+          // Send as string to avoid precision loss ("Channel not found" errors).
           await api('/api/messages/send', {
             method:'POST',
             body: JSON.stringify({
@@ -703,7 +694,7 @@ def create_app(bot=None) -> FastAPI:
               <input placeholder='URL' value={embed.url} onChange={e=>setEmbed(s=>({...s,url:e.target.value}))}/>
             </div>
             <div style={{marginTop:8}}>
-              <textarea rows='4' placeholder='Description' value={embed.description} onChange={e=>setEmbed(s=>({...s,description:e.target.value}))}></textarea>
+              <textarea rows='4' placeholder='Beschrijving' value={embed.description} onChange={e=>setEmbed(s=>({...s,description:e.target.value}))}></textarea>
             </div>
             <div className='row' style={{marginTop:8}}>
               <input placeholder='Thumbnail URL' value={embed.thumbnail_url} onChange={e=>setEmbed(s=>({...s,thumbnail_url:e.target.value}))}/>
@@ -714,7 +705,7 @@ def create_app(bot=None) -> FastAPI:
               <input type='color' value={embed.color} onChange={e=>setEmbed(s=>({...s,color:e.target.value}))} style={{width:60,padding:0,height:42}}/>
             </div>
             <div className='row' style={{marginTop:12}}>
-              <button className='btn primary' onClick={send}>📨 Send</button>
+              <button className='btn primary' onClick={send}>📨 Versturen</button>
             </div>
             <div className='muted' style={{marginTop:8}}>Tip: embed preview rechts is een benadering; Discord kan net anders renderen.</div>
           </div>
@@ -773,7 +764,7 @@ def create_app(bot=None) -> FastAPI:
                 </div>
                 <div className='row'>
                   <input type='number' style={{width:90}} defaultValue={u.strikes} onBlur={e=>setStrike(u.user_id, e.target.value)} />
-                  <button className='btn danger' onClick={()=>setStrike(u.user_id, 0)}>Reset</button>
+                  <button className='btn danger' onClick={()=>setStrike(u.user_id, 0)}>Resetten</button>
                 </div>
               </div>
             ))}
@@ -784,39 +775,78 @@ def create_app(bot=None) -> FastAPI:
 
     function Counters({setErr}){
       const [items, setItems] = useState([]);
+      const [draft, setDraft] = useState({});
+
       const load = async()=>{
         setErr('');
-        try{ const r = await api('/api/counters'); setItems(r.items||[]); }catch(e){ setErr(e.message); }
+        try{
+          const r = await api('/api/counters');
+          const its = r.items || [];
+          setItems(its);
+          // seed drafts
+          const d = {};
+          its.forEach(it=>{ d[it.kind] = (it.manual === null || it.manual === undefined) ? '' : String(it.manual); });
+          setDraft(d);
+        }catch(e){ setErr(e.message); }
       };
       useEffect(()=>{ load(); },[]);
-      const save = async(kind, val)=>{
+
+      const save = async(kind)=>{
         setErr('');
-        try{ await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: Number(val)})}); await load(); }catch(e){ setErr(e.message); }
+        try{
+          const v = (draft[kind] || '').toString().trim();
+          if(v==='') return;
+          await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: v})});
+          await load();
+        }catch(e){ setErr(e.message); }
       };
-      const clear = async(kind)=>{
+
+      const reset = async(kind)=>{
         setErr('');
         try{ await api('/api/counters/clear', {method:'POST', body: JSON.stringify({kind})}); await load(); }catch(e){ setErr(e.message); }
       };
+
+      const fetchNow = async()=>{
+        setErr('');
+        try{ await api('/api/counters/fetch', {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
+      };
+
       return (
         <div className='card'>
-          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Counters overrides</div>
+          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Tellers</div>
           <div className='muted' style={{marginBottom:10}}>
             Handmatige value wint altijd, behalve als de automatisch gefetchte value hoger is.
           </div>
+
           {items.map(it=> (
-            <div key={it.kind} className='row' style={{justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
-              <div>
-                <div style={{fontWeight:800}}>{it.kind}</div>
-                <div className='muted'>fetched: {it.fetched ?? '—'} • manual: {it.manual ?? '—'} • effective: {it.effective ?? '—'}</div>
-              </div>
-              <div className='row'>
-                <input type='number' style={{width:120}} defaultValue={it.manual ?? ''} placeholder='manual' onBlur={e=>{ const v=e.target.value; if(v==='') return; save(it.kind, v); }} />
-                <button className='btn' onClick={()=>clear(it.kind)}>Clear</button>
+            <div key={it.kind} style={{padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
+              <div className='row' style={{justifyContent:'space-between'}}>
+                <div>
+                  <div style={{fontWeight:800}}>{it.kind}</div>
+                  <div className='muted'>
+                    opgehaald: {(it.fetched === null || it.fetched === undefined) ? '—' : it.fetched}
+                    {' • '}handmatig: {(it.manual === null || it.manual === undefined) ? '—' : it.manual}
+                    {' • '}effectief: {(it.effective === null || it.effective === undefined) ? '—' : it.effective}
+                  </div>
+                </div>
+                <div className='row'>
+                  <input
+                    type='number'
+                    style={{width:140}}
+                    value={(draft[it.kind] === undefined) ? '' : draft[it.kind]}
+                    placeholder='handmatig'
+                    onChange={e=>setDraft(d=>({...d,[it.kind]:e.target.value}))}
+                  />
+                  <button className='btn primary' onClick={()=>save(it.kind)}>Opslaan</button>
+                  <button className='btn' onClick={()=>reset(it.kind)}>Resetten</button>
+                </div>
               </div>
             </div>
           ))}
+
           <div className='row' style={{marginTop:12}}>
-            <button className='btn' onClick={load}>↻ Refresh</button>
+            <button className='btn' onClick={load}>↻ Vernieuwen</button>
+            <button className='btn' onClick={fetchNow}>🌐 Nu ophalen</button>
           </div>
         </div>
       );
@@ -825,14 +855,30 @@ def create_app(bot=None) -> FastAPI:
     function Giveaways({setErr}){
       const [list, setList] = useState([]);
       const [channels, setChannels] = useState([]);
-      const [form, setForm] = useState({channel_id:'', prize:'', end:'30m', winners:1, max_participants:'', description:''});
+      const [form, setForm] = useState({channel_id:'', prize:'', end_in:'30m', winners:1, max_participants:'', description:'', thumbnail_b64:'', thumbnail_name:''});
+      const [tpl, setTpl] = useState({channel_id:'', end_dt:'', winners:1});
+
+      const fileToB64 = (file)=> new Promise((resolve, reject)=>{
+        const r = new FileReader();
+        r.onload = ()=>{
+          const s = String(r.result||'');
+          const idx = s.indexOf('base64,');
+          resolve(idx>=0 ? s.slice(idx+7) : s);
+        };
+        r.onerror = ()=>reject(new Error('file read failed'));
+        r.readAsDataURL(file);
+      });
 
       const load = async()=>{
         setErr('');
         try{
           const [a,b] = await Promise.all([api('/api/giveaways'), api('/api/channels')]);
           setList(a.items||[]); setChannels(b.items||[]);
-          if(!form.channel_id && (b.items||[]).length) setForm(f=>({...f, channel_id: String(b.items[0].id)}));
+          if((b.items||[]).length){
+            const first = String(b.items[0].id);
+            if(!form.channel_id) setForm(f=>({...f, channel_id: first}));
+            if(!tpl.channel_id) setTpl(t=>({...t, channel_id: first}));
+          }
         }catch(e){ setErr(e.message); }
       };
       useEffect(()=>{ load(); },[]);
@@ -840,7 +886,41 @@ def create_app(bot=None) -> FastAPI:
       const submit = async()=>{
         setErr('');
         try{
-          await api('/api/giveaways/create', {method:'POST', body: JSON.stringify({...form, winners: Number(form.winners||1), channel_id: Number(form.channel_id)})});
+          const payload = {
+            channel_id: String(form.channel_id),
+            prize: form.prize,
+            end_in: form.end_in,
+            winners: Number(form.winners||1),
+            description: form.description,
+            max_participants: (String(form.max_participants||'').trim()==='') ? null : Number(form.max_participants),
+            thumbnail_b64: form.thumbnail_b64 || null,
+            thumbnail_name: form.thumbnail_name || null,
+          };
+          await api('/api/giveaways/create', {method:'POST', body: JSON.stringify(payload)});
+          await load();
+        }catch(e){ setErr(e.message); }
+      };
+
+      const createTpl = async()=>{
+        setErr('');
+        try{
+          if(!tpl.end_dt) throw new Error('Vul een einddatum in');
+          const end_at = Math.floor(new Date(tpl.end_dt).getTime() / 1000);
+          if(!end_at) throw new Error('Ongeldige einddatum');
+          // Fetch the template icon from our own dashboard static folder and send as attachment.
+          const res = await fetch('/static/vbucks-1000.jpg');
+          const blob = await res.blob();
+          const b64 = await fileToB64(blob);
+          const payload = {
+            channel_id: String(tpl.channel_id),
+            prize: '1000 V-Bucks',
+            description: '🎁 1000 V-Bucks giveaway! Klik op **Deelnemen** om mee te doen.',
+            winners: Number(tpl.winners||1),
+            end_at,
+            thumbnail_b64: b64,
+            thumbnail_name: 'vbucks-1000.jpg',
+          };
+          await api('/api/giveaways/create', {method:'POST', body: JSON.stringify(payload)});
           await load();
         }catch(e){ setErr(e.message); }
       };
@@ -853,6 +933,27 @@ def create_app(bot=None) -> FastAPI:
       return (
         <div className='grid'>
           <div className='card col6'>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Sjabloon</div>
+            <div className='row' style={{alignItems:'center', gap:12}}>
+              <img src='/static/vbucks-1000.jpg' alt='1000 V-Bucks' style={{width:72,height:72,borderRadius:12,objectFit:'cover',border:'1px solid #1f2937'}}/>
+              <div>
+                <div style={{fontWeight:900}}>1000 V-Bucks Giveaway</div>
+                <div className='muted'>Vul alleen einddatum + aantal winnaars in.</div>
+              </div>
+            </div>
+            <div className='row' style={{marginTop:10}}>
+              <select value={tpl.channel_id} onChange={e=>setTpl(t=>({...t, channel_id:e.target.value}))}>
+                {channels.map(c=> <option key={c.id} value={c.id}>#{c.name}</option>)}
+              </select>
+              <input type='datetime-local' value={tpl.end_dt} onChange={e=>setTpl(t=>({...t, end_dt:e.target.value}))}/>
+              <input placeholder='Winnaars' type='number' value={tpl.winners} onChange={e=>setTpl(t=>({...t, winners:e.target.value}))}/>
+            </div>
+            <div className='row' style={{marginTop:10}}>
+              <button className='btn primary' onClick={createTpl}>🎁 Create template giveaway</button>
+            </div>
+          </div>
+
+          <div className='card col6'>
             <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Nieuwe giveaway</div>
             <div className='row'>
               <select value={form.channel_id} onChange={e=>setForm(f=>({...f, channel_id:e.target.value}))}>
@@ -861,11 +962,22 @@ def create_app(bot=None) -> FastAPI:
             </div>
             <div className='row' style={{marginTop:10}}>
               <input placeholder='Prijs' value={form.prize} onChange={e=>setForm(f=>({...f, prize:e.target.value}))}/>
-              <input placeholder='Eind (30m, 2h, 1d, 19:00, 2026-01-12 19:00)' value={form.end} onChange={e=>setForm(f=>({...f, end:e.target.value}))}/>
+              <input placeholder='Eind (30m, 2h, 1d, 19:00, 2026-01-12 19:00)' value={form.end_in} onChange={e=>setForm(f=>({...f, end_in:e.target.value}))}/>
             </div>
             <div className='row' style={{marginTop:10}}>
-              <input placeholder='Winners' type='number' value={form.winners} onChange={e=>setForm(f=>({...f, winners:e.target.value}))}/>
+              <input placeholder='Winnaars' type='number' value={form.winners} onChange={e=>setForm(f=>({...f, winners:e.target.value}))}/>
               <input placeholder='Max deelnemers (optioneel)' value={form.max_participants} onChange={e=>setForm(f=>({...f, max_participants:e.target.value}))}/>
+            </div>
+            <div className='row' style={{marginTop:10, alignItems:'center'}}>
+              <input type='file' accept='image/*' onChange={async(e)=>{
+                const file = e.target.files && e.target.files[0];
+                if(!file) return;
+                try{
+                  const b64 = await fileToB64(file);
+                  setForm(f=>({...f, thumbnail_b64: b64, thumbnail_name: file.name}));
+                }catch(err){ setErr('Upload mislukt'); }
+              }}/>
+              <button className='btn' onClick={()=>setForm(f=>({...f, thumbnail_b64:'', thumbnail_name:''}))}>🗑️ Clear image</button>
             </div>
             <div style={{marginTop:10}}>
               <textarea placeholder='Beschrijving' rows='4' value={form.description} onChange={e=>setForm(f=>({...f, description:e.target.value}))}></textarea>
@@ -908,7 +1020,7 @@ def create_app(bot=None) -> FastAPI:
                 <div style={{fontWeight:800}}>{w.user_tag || w.user_id}</div>
                 <div className='muted'>warns: {w.warns}</div>
               </div>
-              <button className='btn danger' onClick={()=>clear(w.user_id)}>Reset</button>
+              <button className='btn danger' onClick={()=>clear(w.user_id)}>Resetten</button>
             </div>
           ))}
         </div>
@@ -979,7 +1091,74 @@ def create_app(bot=None) -> FastAPI:
         items = []
         if guild:
             for ch in guild.text_channels:
-                items.append({"id": ch.id, "name": ch.name})
+                # Discord IDs are snowflakes (often larger than JS safe integers).
+                # Return them as strings so the dashboard doesn't lose precision.
+                items.append({"id": str(ch.id), "name": ch.name})
+        return {"items": items}
+
+    @app.get("/api/voice_channels")
+    async def api_voice_channels(req: Request):
+        """List joinable voice/stage channels for the dashboard."""
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        guild = bot.get_guild(gid) if bot else None
+        if not guild:
+            return {"items": []}
+
+        items = []
+        # Be robust across discord.py / pycord forks.
+        ChannelType = getattr(discord, "ChannelType", None)
+        voice_type = getattr(ChannelType, "voice", None) if ChannelType else None
+        stage_type = getattr(ChannelType, "stage_voice", None) if ChannelType else None
+
+        for ch in getattr(guild, "channels", []):
+            ctype = getattr(ch, "type", None)
+            is_voice = False
+            if voice_type is not None and ctype == voice_type:
+                is_voice = True
+            elif stage_type is not None and ctype == stage_type:
+                is_voice = True
+            else:
+                # Fallback heuristics
+                name = str(ctype) if ctype is not None else ""
+                if "voice" in name:
+                    is_voice = True
+                # Voice channels typically have bitrate + user_limit
+                if hasattr(ch, "bitrate") and hasattr(ch, "user_limit"):
+                    is_voice = True
+            if is_voice:
+                items.append({"id": str(getattr(ch, "id", "")), "name": getattr(ch, "name", "")})
+
+        items = [it for it in items if it.get("id")]
+        items.sort(key=lambda x: x.get("name") or "")
+        return {"items": items}
+
+    @app.get("/api/bans")
+    async def api_bans(req: Request):
+        """List bans for the configured guild."""
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        guild = bot.get_guild(gid) if bot else None
+        if not guild:
+            return {"items": []}
+        items = []
+        try:
+            # Limit to avoid huge responses; increase if needed.
+            async for entry in guild.bans(limit=200):
+                u = getattr(entry, "user", None)
+                items.append({
+                    "user_id": str(getattr(u, "id", "")),
+                    "user_tag": str(u) if u else "",
+                    "reason": getattr(entry, "reason", None),
+                })
+        except Exception as e:
+            return _error(500, f"Bans ophalen mislukt: {e}")
         return {"items": items}
 
     # --- Message sender (Mee6-style) ---
@@ -990,7 +1169,12 @@ def create_app(bot=None) -> FastAPI:
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
-        channel_id = int(body.get("channel_id") or 0)
+        # Channel IDs are Discord snowflakes; the frontend sends them as strings
+        # to avoid JS precision loss.
+        try:
+            channel_id = int(str(body.get("channel_id") or "0"))
+        except Exception:
+            channel_id = 0
         content = (body.get("content") or "").rstrip()
         embed_in = body.get("embed") or None
         if not channel_id:
@@ -1081,6 +1265,21 @@ def create_app(bot=None) -> FastAPI:
             return _error(400, "Invalid value")
         gid = getattr(bot, "guild_id", 0)
         bot.db.set_counter_override(gid, kind, max(0, value))
+        # Apply immediately
+        try:
+            cog = bot.get_cog('Counters') if bot else None
+            if cog:
+                import asyncio
+                asyncio.create_task(cog.dashboard_fetch(gid))
+        except Exception:
+            pass
+        # Return updated list
+        try:
+            cog = bot.get_cog('Counters') if bot else None
+            if cog:
+                return cog.dashboard_counters(gid)
+        except Exception:
+            pass
         return {"ok": True}
 
     @app.post("/api/counters/clear")
@@ -1095,7 +1294,38 @@ def create_app(bot=None) -> FastAPI:
             return _error(400, "Invalid kind")
         gid = getattr(bot, "guild_id", 0)
         bot.db.clear_counter_override(gid, kind)
+        # Apply immediately
+        try:
+            cog = bot.get_cog('Counters') if bot else None
+            if cog:
+                import asyncio
+                asyncio.create_task(cog.dashboard_fetch(gid))
+        except Exception:
+            pass
+        try:
+            cog = bot.get_cog('Counters') if bot else None
+            if cog:
+                return cog.dashboard_counters(gid)
+        except Exception:
+            pass
         return {"ok": True}
+
+    @app.post("/api/counters/fetch")
+    async def api_counters_fetch(req: Request):
+        """Force-refresh counters right now (useful when overrides are changed)."""
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        cog = bot.get_cog('Counters') if bot else None
+        if not cog:
+            return _error(400, "Counters cog not loaded")
+        try:
+            await cog.dashboard_fetch(gid)
+        except Exception as e:
+            return _error(400, str(e))
+        return cog.dashboard_counters(gid)
 
     @app.get("/api/warns")
     async def api_warns(req: Request):
@@ -1218,19 +1448,57 @@ def create_app(bot=None) -> FastAPI:
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
-        uid = int(body.get("user_id"))
+        try:
+            uid = int(str(body.get("user_id") or "0"))
+        except Exception:
+            uid = 0
         gid = getattr(bot, "guild_id", 0)
         guild = bot.get_guild(gid)
+        if not uid:
+            return _error(400, "user_id ontbreekt")
         if not guild:
-            return _error(400, "Guild not cached")
-        member = guild.get_member(uid) or await guild.fetch_member(uid)
-        # pull roles_json from db
-        cur = bot.db.conn.cursor()
-        row = cur.execute("SELECT roles_json FROM mutes WHERE guild_id=? AND user_id=?", (gid, uid)).fetchone()
-        roles_json = row[0] if row else "[]"
-        await bot._restore_roles_after_mute(guild, member, roles_json)
-        bot.db.clear_mute(gid, uid)
-        return {"ok": True}
+            return _error(400, "Guild niet in cache")
+
+        # Fetch member safely
+        member = guild.get_member(uid)
+        if member is None:
+            try:
+                member = await guild.fetch_member(uid)
+            except Exception:
+                return _error(400, "Gebruiker niet gevonden in de server")
+
+        try:
+            cur = bot.db.conn.cursor()
+            row = cur.execute("SELECT roles_json FROM mutes WHERE guild_id=? AND user_id=?", (gid, uid)).fetchone()
+            roles_json = (row[0] if row else "[]")
+
+            await bot._restore_roles_after_mute(guild, member, roles_json)
+            bot.db.clear_mute(gid, uid)
+            return {"ok": True}
+        except Exception as e:
+            return _error(500, f"Unmute mislukt: {e}")
+
+    @app.get("/api/bans")
+    async def api_bans(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        guild = bot.get_guild(gid) if bot else None
+        if not guild:
+            return {"items": []}
+        items = []
+        try:
+            # discord.py returns BanEntry objects
+            async for entry in guild.bans(limit=200):
+                user = getattr(entry, "user", None)
+                reason = getattr(entry, "reason", None)
+                if user:
+                    items.append({"user_id": int(user.id), "user_tag": str(user), "reason": reason})
+        except Exception as e:
+            return _error(500, f"Kon bans niet ophalen: {e}")
+        return {"items": items}
 
     # --- Music ---
     @app.get("/api/music/status")
@@ -1256,81 +1524,12 @@ def create_app(bot=None) -> FastAPI:
         cog = bot.get_cog('Music')
         if not cog:
             return _error(400, "Music cog not loaded")
-        try:
-            await cog.dashboard_action(gid, uid, body)
-            return {"ok": True}
-        except Exception as e:
-            return _error(500, str(e))
-
-    @app.get("/api/radio/stations")
-    async def api_radio_stations(req: Request):
-        """Expose radio stations to the dashboard.
-
-        Env format supported:
-          {"qmusic":"https://...mp3", ...}
-        """
-        try:
-            await _require_allowed(req)
-        except PermissionError as e:
-            return _error(401, str(e))
-
-        # Friendly names + logos (remote). You can override by setting RADIO_STATIONS_META_JSON.
-        default_meta = {
-            "qmusic": {"name": "Qmusic", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/Qmusic%20logo.svg"},
-            "slam": {"name": "SLAM!", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/Slam%21_logo.png"},
-            "lofi": {"name": "SomaFM – Groove Salad", "logo_url": "https://somafm.com/img3/somafm-logo.png"},
-            "538": {"name": "Radio 538", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/Logo%20538%20Nederland.png"},
-            "radio10": {"name": "Radio 10", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/Radio%2010%20logo%202019.svg"},
-            "veronica": {"name": "Veronica", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/Radio_Veronica_logo.svg"},
-            "sky_radio": {"name": "Sky Radio", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/Sky%20Radio%20logo%202019.svg"},
-            "npo_radio1": {"name": "NPO Radio 1", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/NPO%20Radio%201%20logo%202014.svg"},
-            "npo_radio2": {"name": "NPO Radio 2", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/NPO%20Radio%202%20logo.svg"},
-            "npo_3fm": {"name": "NPO 3FM", "logo_url": "https://commons.wikimedia.org/wiki/Special:FilePath/NPO%203FM%20logo%202020.svg"},
-        }
-
-        meta_raw = (os.getenv("RADIO_STATIONS_META_JSON") or "").strip()
-        meta = default_meta
-        if meta_raw:
-            try:
-                parsed = json.loads(meta_raw)
-                if isinstance(parsed, dict):
-                    meta = {**default_meta, **parsed}
-            except Exception:
-                meta = default_meta
-
-        cog = bot.get_cog('Music')
-        stations = {}
-        if cog and getattr(cog, "radio_stations", None):
-            stations = dict(getattr(cog, "radio_stations"))
-        else:
-            # fallback: parse env directly
-            raw = (os.getenv("RADIO_STATIONS_JSON") or "{}").strip()
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict):
-                    stations = {str(k): str(v) for k, v in parsed.items()}
-            except Exception:
-                stations = {}
-
-        items = []
-        order = ["qmusic", "slam", "538", "radio10", "veronica", "sky_radio", "npo_radio1", "npo_radio2", "npo_3fm", "lofi"]
-        keys = [k for k in order if k in stations] + [k for k in stations.keys() if k not in order]
-        for k in keys:
-            url = stations.get(k)
-            if not url:
-                continue
-            m = meta.get(k, {}) if isinstance(meta, dict) else {}
-            items.append({
-                "id": str(k),
-                "name": str(m.get("name") or k),
-                "stream_url": str(url),
-                "logo_url": str(m.get("logo_url") or ""),
-            })
-        return {"stations": items}
+        await cog.dashboard_action(gid, uid, body)
+        return {"ok": True}
 
 
 
-    # --- Playlist (default) ---
+    # --- Afspelenlist (default) ---
     @app.get("/api/playlist/tracks")
     async def api_playlist_tracks(req: Request):
         try:
@@ -1389,11 +1588,45 @@ def create_app(bot=None) -> FastAPI:
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
+        # Normalize payload from the inline dashboard.
+        # - channel_id may arrive as string (Discord snowflake) -> cast safely
+        # - dashboard UI may send `end` instead of `end_in`
+        try:
+            if "channel_id" in body:
+                body["channel_id"] = int(str(body.get("channel_id") or "0"))
+        except Exception:
+            return _error(400, "Invalid channel_id")
+
+        if (not body.get("end_at")) and (not body.get("end_in")) and body.get("end"):
+            body["end_in"] = body.get("end")
+        if "end" in body:
+            body.pop("end", None)
+
+        # max_participants optional int
+        if "max_participants" in body:
+            mp = body.get("max_participants")
+            if mp in ("", None):
+                body["max_participants"] = None
+            else:
+                try:
+                    body["max_participants"] = int(mp)
+                except Exception:
+                    return _error(400, "Invalid max_participants")
+
+        if "winners" in body:
+            try:
+                body["winners"] = int(body.get("winners") or 1)
+            except Exception:
+                body["winners"] = 1
         cog = bot.get_cog('Giveaway')
         if not cog:
             return _error(400, "Giveaway cog not loaded")
-        await cog.dashboard_create(guild_id=getattr(bot, 'guild_id', 0), actor_user_id=uid, **body)
-        return {"ok": True}
+        try:
+            await cog.dashboard_create(guild_id=getattr(bot, 'guild_id', 0), actor_user_id=uid, **body)
+            return {"ok": True}
+        except Exception as e:
+            # Surface a friendly error to the dashboard (instead of generic 500)
+            return _error(400, str(e))
 
     @app.post("/api/giveaways/{giveaway_id}/cancel")
     async def api_giveaways_cancel(giveaway_id: int, req: Request):

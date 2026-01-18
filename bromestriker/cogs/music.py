@@ -880,18 +880,13 @@ class Music(commands.Cog):
             "pause_resume": "toggle",
             "play": "enqueue",
             "add_playlist": "playlist_add",
+            "radio_play": "enqueue_radio",
         }
         action = aliases.get(action, action)
 
         # Accept both `url` and `query` payload keys.
         url = (payload.get("url") or payload.get("query") or "").strip()
-        # Optional voice channel id for join/move.
-        channel_id = None
-        try:
-            if payload.get("channel_id") is not None:
-                channel_id = int(str(payload.get("channel_id")))
-        except Exception:
-            channel_id = None
+        station_id = (payload.get("station_id") or "").strip().lower()
         g = self.bot.get_guild(guild_id)
         if not g:
             return
@@ -913,34 +908,6 @@ class Music(commands.Cog):
         if action == "skip":
             if vc and (vc.is_playing() or vc.is_paused()):
                 vc.stop()
-            return
-
-        if action == "disconnect":
-            if vc:
-                try:
-                    await vc.disconnect(force=True)
-                except Exception:
-                    pass
-            return
-
-        if action == "join":
-            if not channel_id:
-                return
-            ch = g.get_channel(channel_id)
-            if ch is None:
-                try:
-                    ch = await self.bot.fetch_channel(channel_id)
-                except Exception:
-                    ch = None
-            if not isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
-                return
-            try:
-                if vc is None:
-                    await ch.connect()
-                else:
-                    await vc.move_to(ch)
-            except Exception:
-                pass
             return
 
         if action == "stop":
@@ -967,10 +934,35 @@ class Music(commands.Cog):
                 player.current_audio.volume = player.volume
             return
 
+        if action == "enqueue_radio":
+            # Look up station id -> stream url
+            if not station_id:
+                station_id = url.lower()
+            stream = self.radio_stations.get(station_id)
+            if not stream:
+                raise ValueError("Station niet gevonden")
+            nice = station_id
+            try:
+                nice = station_id.replace('_', ' ').upper() if station_id.startswith('npo_') else station_id.replace('_', ' ').title()
+            except Exception:
+                pass
+            track = Track(title=f"📻 {nice}", url=stream, webpage_url=stream, requester_id=actor_user_id, is_radio=True, radio_name=nice)
+            await player.queue.put(track)
+            if player._task is None or player._task.done():
+                player._task = asyncio.create_task(self._player_loop(guild_id))
+            return
+
         if action == "enqueue" and url:
             # Enqueue a URL like /music speel does
             # Use a fake interaction-less flow by extracting info and pushing to queue
-            track = await self._extract_track(url, requester_id=actor_user_id)
+            # If the input matches a radio station key, treat it as radio.
+            key = url.strip().lower()
+            if key in self.radio_stations:
+                stream = self.radio_stations[key]
+                nice = key.replace('_', ' ').title()
+                track = Track(title=f"📻 {nice}", url=stream, webpage_url=stream, requester_id=actor_user_id, is_radio=True, radio_name=nice)
+            else:
+                track = await self._extract_track(url, requester_id=actor_user_id)
             await player.queue.put(track)
             if player._task is None or player._task.done():
                 player._task = asyncio.create_task(self._player_loop(guild_id))
@@ -1008,9 +1000,7 @@ class Music(commands.Cog):
 
     async def _extract_track(self, query: str, requester_id: int | None = None) -> Track:
         # Small helper for dashboard enqueue/playlist
-        # In Py3.11+, get_event_loop() can fail depending on context;
-        # within a coroutine we always want the running loop.
-        loop = asyncio.get_running_loop()
+        loop = asyncio.get_event_loop()
         ytdl = yt_dlp.YoutubeDL({**BASE_YTDL_OPTS, "ffmpeg_location": self.ffmpeg_path})
         info = await loop.run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
         if "entries" in info and isinstance(info["entries"], list) and info["entries"]:
