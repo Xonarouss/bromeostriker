@@ -424,7 +424,8 @@ def create_app(bot=None) -> FastAPI:
       strikes: 'Strikes',
       counters: 'Counters',
       warns: 'Waarschuwingen',
-      mutes: 'Mutes'
+      mutes: 'Mutes',
+      bans: 'Bans'
     };
 
 
@@ -441,6 +442,7 @@ def create_app(bot=None) -> FastAPI:
       const [me, setMe] = useState(null);
       const [tab, setTab] = useState('music');
       const [err, setErr] = useState('');
+      const [timeNL, setTimeNL] = useState('');
 
       const loadMe = async()=>{
         setErr('');
@@ -448,6 +450,14 @@ def create_app(bot=None) -> FastAPI:
       };
 
       useEffect(()=>{ loadMe(); },[]);
+
+      useEffect(()=>{
+        const fmt = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', weekday:'short', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        const tick = ()=> setTimeNL(fmt.format(new Date()));
+        tick();
+        const id = setInterval(tick, 1000);
+        return ()=>clearInterval(id);
+      },[]);
 
       if(!me){
         return (
@@ -482,7 +492,10 @@ def create_app(bot=None) -> FastAPI:
       return (
         <div>
           <div className='top'>
-            <div className='brand'>BromeoStriker Dashboard</div>
+            <div className='row' style={{gap:14}}>
+              <div className='muted' style={{minWidth:170}}>{timeNL}</div>
+              <div className='brand'>BromeoStriker Dashboard</div>
+            </div>
             <div className='row'>
               <div className='muted'>Ingelogd als {me.username}</div>
               <a className='btn' href='/logout'>Uitloggen</a>
@@ -491,8 +504,8 @@ def create_app(bot=None) -> FastAPI:
           <div className='wrap'>
             <div className='tabs'>
               {(() => {
-  const L={music:'Muziek',messages:'Berichten',giveaways:'Giveaways',strikes:'Strikes',counters:'Tellers',warns:'Waarschuwingen',mutes:'Mutes'};
-  return ['music','messages','giveaways','strikes','counters','warns','mutes'].map(k=> (
+  const L={music:'Muziek',messages:'Berichten',giveaways:'Giveaways',strikes:'Strikes',counters:'Tellers',warns:'Waarschuwingen',mutes:'Mutes',bans:'Bans'};
+  return ['music','messages','giveaways','strikes','counters','warns','mutes','bans'].map(k=> (
     <div key={k} className={'tab '+(tab===k?'active':'')} onClick={()=>setTab(k)}>{L[k]||k}</div>
   ));
 })()}
@@ -505,6 +518,35 @@ def create_app(bot=None) -> FastAPI:
             {tab==='counters' && <Counters setErr={setErr} />}
             {tab==='warns' && <Warns setErr={setErr} />}
             {tab==='mutes' && <Mutes setErr={setErr} />}
+            {tab==='bans' && <Bans setErr={setErr} />}
+          </div>
+            <div style={{marginTop:18, paddingTop:14, borderTop:'1px solid #1f2937', textAlign:'center'}} className='muted'>
+              Made with ❤️ by <a href='https://xonarous.nl' target='_blank' rel='noreferrer'>Xonarous</a>
+            </div>
+        </div>
+      );
+    }
+
+    
+
+    function Bans({setErr}){
+      const [items, setItems] = useState([]);
+      const load = async()=>{ setErr(''); try{ setItems((await api('/api/bans')).items||[]); }catch(e){ setErr(e.message); } };
+      useEffect(()=>{ load(); },[]);
+      return (
+        <div className='card'>
+          <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Bans</div>
+          <div className='muted' style={{marginBottom:10}}>Overzicht van recent opgehaalde bans (max 200).</div>
+          <div className='row' style={{justifyContent:'space-between', marginBottom:10}}>
+            <button className='btn' onClick={load}>↻ Vernieuwen</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {(items||[]).length===0 ? <div className='muted'>Geen bans gevonden.</div> : (items||[]).map((b,i)=>(
+              <div key={i} className='card' style={{margin:0, padding:12, background:'#0b1220'}}>
+                <div style={{fontWeight:800}}>{b.user_tag || b.user_id}</div>
+                <div className='muted'>Reden: {b.reason || '—'}</div>
+              </div>
+            ))}
           </div>
         </div>
       );
@@ -1031,7 +1073,10 @@ def create_app(bot=None) -> FastAPI:
         username = str(uid)
         if guild is not None:
             try:
-                member = guild.get_member(uid) or await guild.fetch_member(uid)
+                try:
+            member = guild.get_member(uid) or await guild.fetch_member(uid)
+        except Exception:
+            return _error(400, 'Gebruiker niet gevonden in server')
                 username = f"{member.name}#{member.discriminator}" if getattr(member, "discriminator", None) else member.name
                 allowed = bool(getattr(member.guild_permissions, "administrator", False)) or (member.get_role(_bcrew_role_id()) is not None)
             except Exception:
@@ -1064,14 +1109,58 @@ def create_app(bot=None) -> FastAPI:
         guild = bot.get_guild(gid) if bot else None
         if not guild:
             return {"items": []}
+
         items = []
-        # Some discord libs / versions may not expose StageChannel.
-        StageChannel = getattr(discord, "StageChannel", None)
-        for ch in guild.channels:
-            if isinstance(ch, discord.VoiceChannel) or (StageChannel and isinstance(ch, StageChannel)):
-                items.append({"id": str(ch.id), "name": ch.name})
-        # Keep stable ordering
+        # Be robust across discord.py / pycord forks.
+        ChannelType = getattr(discord, "ChannelType", None)
+        voice_type = getattr(ChannelType, "voice", None) if ChannelType else None
+        stage_type = getattr(ChannelType, "stage_voice", None) if ChannelType else None
+
+        for ch in getattr(guild, "channels", []):
+            ctype = getattr(ch, "type", None)
+            is_voice = False
+            if voice_type is not None and ctype == voice_type:
+                is_voice = True
+            elif stage_type is not None and ctype == stage_type:
+                is_voice = True
+            else:
+                # Fallback heuristics
+                name = str(ctype) if ctype is not None else ""
+                if "voice" in name:
+                    is_voice = True
+                # Voice channels typically have bitrate + user_limit
+                if hasattr(ch, "bitrate") and hasattr(ch, "user_limit"):
+                    is_voice = True
+            if is_voice:
+                items.append({"id": str(getattr(ch, "id", "")), "name": getattr(ch, "name", "")})
+
+        items = [it for it in items if it.get("id")]
         items.sort(key=lambda x: x.get("name") or "")
+        return {"items": items}
+
+    @app.get("/api/bans")
+    async def api_bans(req: Request):
+        """List bans for the configured guild."""
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        guild = bot.get_guild(gid) if bot else None
+        if not guild:
+            return {"items": []}
+        items = []
+        try:
+            # Limit to avoid huge responses; increase if needed.
+            async for entry in guild.bans(limit=200):
+                u = getattr(entry, "user", None)
+                items.append({
+                    "user_id": str(getattr(u, "id", "")),
+                    "user_tag": str(u) if u else "",
+                    "reason": getattr(entry, "reason", None),
+                })
+        except Exception as e:
+            return _error(500, f"Bans ophalen mislukt: {e}")
         return {"items": items}
 
     # --- Message sender (Mee6-style) ---
@@ -1361,19 +1450,57 @@ def create_app(bot=None) -> FastAPI:
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
-        uid = int(body.get("user_id"))
+        try:
+            uid = int(str(body.get("user_id") or "0"))
+        except Exception:
+            uid = 0
         gid = getattr(bot, "guild_id", 0)
         guild = bot.get_guild(gid)
+        if not uid:
+            return _error(400, "user_id ontbreekt")
         if not guild:
-            return _error(400, "Guild not cached")
-        member = guild.get_member(uid) or await guild.fetch_member(uid)
-        # pull roles_json from db
-        cur = bot.db.conn.cursor()
-        row = cur.execute("SELECT roles_json FROM mutes WHERE guild_id=? AND user_id=?", (gid, uid)).fetchone()
-        roles_json = row[0] if row else "[]"
-        await bot._restore_roles_after_mute(guild, member, roles_json)
-        bot.db.clear_mute(gid, uid)
-        return {"ok": True}
+            return _error(400, "Guild niet in cache")
+
+        # Fetch member safely
+        member = guild.get_member(uid)
+        if member is None:
+            try:
+                member = await guild.fetch_member(uid)
+            except Exception:
+                return _error(400, "Gebruiker niet gevonden in de server")
+
+        try:
+            cur = bot.db.conn.cursor()
+            row = cur.execute("SELECT roles_json FROM mutes WHERE guild_id=? AND user_id=?", (gid, uid)).fetchone()
+            roles_json = (row[0] if row else "[]")
+
+            await bot._restore_roles_after_mute(guild, member, roles_json)
+            bot.db.clear_mute(gid, uid)
+            return {"ok": True}
+        except Exception as e:
+            return _error(500, f"Unmute mislukt: {e}")
+
+    @app.get("/api/bans")
+    async def api_bans(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        guild = bot.get_guild(gid) if bot else None
+        if not guild:
+            return {"items": []}
+        items = []
+        try:
+            # discord.py returns BanEntry objects
+            async for entry in guild.bans(limit=200):
+                user = getattr(entry, "user", None)
+                reason = getattr(entry, "reason", None)
+                if user:
+                    items.append({"user_id": int(user.id), "user_tag": str(user), "reason": reason})
+        except Exception as e:
+            return _error(500, f"Kon bans niet ophalen: {e}")
+        return {"items": items}
 
     # --- Music ---
     @app.get("/api/music/status")
