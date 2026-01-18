@@ -807,10 +807,10 @@ def create_app(bot=None) -> FastAPI:
             <div key={it.kind} className='row' style={{justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
               <div>
                 <div style={{fontWeight:800}}>{it.kind}</div>
-                <div className='muted'>fetched: {it.fetched ?? '—'} • manual: {it.manual ?? '—'} • effective: {it.effective ?? '—'}</div>
+                <div className='muted'>fetched: {(it.fetched === null || it.fetched === undefined) ? '—' : it.fetched} • manual: {(it.manual === null || it.manual === undefined) ? '—' : it.manual} • effective: {(it.effective === null || it.effective === undefined) ? '—' : it.effective}</div>
               </div>
               <div className='row'>
-                <input type='number' style={{width:120}} defaultValue={it.manual ?? ''} placeholder='manual' onBlur={e=>{ const v=e.target.value; if(v==='') return; save(it.kind, v); }} />
+                <input type='number' style={{width:120}} defaultValue={(it.manual === null || it.manual === undefined) ? '' : it.manual} placeholder='manual' onBlur={e=>{ const v=e.target.value; if(v==='') return; save(it.kind, v); }} />
                 <button className='btn' onClick={()=>clear(it.kind)}>Clear</button>
               </div>
             </div>
