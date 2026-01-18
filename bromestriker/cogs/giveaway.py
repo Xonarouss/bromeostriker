@@ -105,8 +105,40 @@ class GiveawayState:
     end_at: int
     max_participants: Optional[int]
     thumbnail_name: Optional[str]
+    # Who created the giveaway (dashboard / interaction). Optional for legacy rows.
+    created_by: Optional[int] = None
     winners_count: int = 1
     winner_ids_json: Optional[str] = None
+
+    @classmethod
+    def from_row(cls, r) -> "GiveawayState":
+        """Build a GiveawayState from a DB row/dict.
+
+        The DB schema contains more fields than the dashboard needs.
+        We keep parsing resilient so older rows don't break.
+        """
+        # sqlite3.Row supports keys(); dict supports keys(); keep it defensive
+        keys = set(r.keys()) if hasattr(r, "keys") else set()
+        def _get(k, default=None):
+            try:
+                return r[k]
+            except Exception:
+                return default
+
+        return cls(
+            giveaway_id=int(_get("id", 0) or 0),
+            guild_id=int(_get("guild_id", 0) or 0),
+            channel_id=int(_get("channel_id", 0) or 0),
+            message_id=int(_get("message_id", 0) or 0),
+            prize=str(_get("prize", "") or ""),
+            description=str(_get("description", "") or ""),
+            end_at=int(_get("end_at", 0) or 0),
+            max_participants=(int(_get("max_participants")) if _get("max_participants") is not None else None),
+            thumbnail_name=(str(_get("thumbnail_name")) if _get("thumbnail_name") else None),
+            created_by=(int(_get("created_by")) if _get("created_by") is not None else None),
+            winners_count=(int(_get("winners_count")) if ("winners_count" in keys and _get("winners_count") is not None) else 1),
+            winner_ids_json=(str(_get("winner_ids")) if ("winner_ids" in keys and _get("winner_ids")) else None),
+        )
 class ParticipateView(discord.ui.View):
     def __init__(self, cog: "Giveaway", state: GiveawayState, *, ended: bool = False):
         super().__init__(timeout=None)

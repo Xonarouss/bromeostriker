@@ -417,6 +417,17 @@ def create_app(bot=None) -> FastAPI:
   <script type="text/babel" data-presets="react">
     const {useEffect, useMemo, useState} = React;
 
+    const TAB_LABELS = {
+      music: 'Muziek',
+      messages: 'Berichten',
+      giveaways: 'Giveaways',
+      strikes: 'Strikes',
+      counters: 'Counters',
+      warns: 'Waarschuwingen',
+      mutes: 'Mutes'
+    };
+
+
     async function api(path, opts={}){
       const r = await fetch(path, {credentials:'include', headers:{'Content-Type':'application/json', ...(opts.headers||{})}, ...opts});
       const t = await r.text();
@@ -461,7 +472,7 @@ def create_app(bot=None) -> FastAPI:
               <div style={{fontSize:20,fontWeight:800}}>Geen toegang</div>
               <div className='muted'>Alleen B-Crew of Discord Admin mag dit dashboard gebruiken.</div>
               <div className='row' style={{marginTop:10}}>
-                <a className='btn' href='/logout'>Logout</a>
+                <a className='btn' href='/logout'>Uitloggen</a>
               </div>
             </div>
           </div>
@@ -474,18 +485,21 @@ def create_app(bot=None) -> FastAPI:
             <div className='brand'>BromeoStriker Dashboard</div>
             <div className='row'>
               <div className='muted'>Ingelogd als {me.username}</div>
-              <a className='btn' href='/logout'>Logout</a>
+              <a className='btn' href='/logout'>Uitloggen</a>
             </div>
           </div>
           <div className='wrap'>
             <div className='tabs'>
-              {['music','messages','giveaways','strikes','counters','warns','mutes'].map(k=> (
-                <div key={k} className={'tab '+(tab===k?'active':'')} onClick={()=>setTab(k)}>{k}</div>
-              ))}
+              {(() => {
+  const L={music:'Muziek',messages:'Berichten',giveaways:'Giveaways',strikes:'Strikes',counters:'Tellers',warns:'Waarschuwingen',mutes:'Mutes'};
+  return ['music','messages','giveaways','strikes','counters','warns','mutes'].map(k=> (
+    <div key={k} className={'tab '+(tab===k?'active':'')} onClick={()=>setTab(k)}>{L[k]||k}</div>
+  ));
+})()}
             </div>
             {err && <div className='card danger'>❌ {err}</div>}
             {tab==='music' && <Music setErr={setErr} />}
-            {tab==='messages' && <Messages setErr={setErr} />}
+            {tab==='messages' && <Berichten setErr={setErr} />}
             {tab==='giveaways' && <Giveaways setErr={setErr} />}
             {tab==='strikes' && <Strikes setErr={setErr} />}
             {tab==='counters' && <Counters setErr={setErr} />}
@@ -499,20 +513,20 @@ def create_app(bot=None) -> FastAPI:
     function Music({setErr}){
       const [st, setSt] = useState(null);
       const [url, setUrl] = useState('');
-      const [voiceChannels, setVoiceChannels] = useState([]);
-      const [voiceId, setVoiceId] = useState('');
+      const [voiceChannels, setSpraakkanaalChannels] = useState([]);
+      const [voiceId, setSpraakkanaalId] = useState('');
       const load = async()=>{
         setErr('');
         try{ setSt(await api('/api/music/status')); }catch(e){ setErr(e.message); }
       };
-      const loadVoice = async()=>{
+      const loadSpraakkanaal = async()=>{
         try{
           const r = await api('/api/voice_channels');
-          setVoiceChannels(r.items||[]);
-          if(!voiceId && (r.items||[]).length) setVoiceId(String(r.items[0].id));
+          setSpraakkanaalChannels(r.items||[]);
+          if(!voiceId && (r.items||[]).length) setSpraakkanaalId(String(r.items[0].id));
         }catch(e){}
       };
-      useEffect(()=>{ load(); loadVoice(); const t=setInterval(load, 4000); return ()=>clearInterval(t); },[]);
+      useEffect(()=>{ load(); loadSpraakkanaal(); const t=setInterval(load, 4000); return ()=>clearInterval(t); },[]);
 
       const act = async(action, payload={})=>{
         setErr('');
@@ -522,7 +536,7 @@ def create_app(bot=None) -> FastAPI:
       return (
         <div className='grid'>
           <div className='card col6'>
-            <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Now Playing</div>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Nu bezig</div>
             <div className='muted'>
               {(st && st.now && (typeof st.now === 'object')) ? (
                 <a href={st.now.webpage_url || '#'} target='_blank' rel='noreferrer'>
@@ -532,30 +546,30 @@ def create_app(bot=None) -> FastAPI:
             </div>
             <div className='row' style={{marginTop:12}}>
               <button className='btn' onClick={()=>act('pause_resume')}>⏯️</button>
-              <button className='btn primary' onClick={()=>act('skip')}>⏭️ Skip</button>
+              <button className='btn primary' onClick={()=>act('skip')}>⏭️ Overslaan</button>
               <button className='btn' onClick={()=>act('stop')}>⏹️ Stop</button>
               <button className='btn' onClick={()=>act('vol_down')}>🔉</button>
               <button className='btn' onClick={()=>act('vol_up')}>🔊</button>
             </div>
             <div className='row' style={{marginTop:14}}>
-              <input placeholder='YouTube link of zoekterm…' value={url} onChange={e=>setUrl(e.target.value)} />
-              <button className='btn primary' onClick={()=>act('play', {query:url})}>▶️ Play</button>
-              <button className='btn' onClick={()=>act('add_playlist', {query:url})}>➕ Playlist</button>
+              <input placeholder='YouTube-link of zoekterm…' value={url} onChange={e=>setUrl(e.target.value)} />
+              <button className='btn primary' onClick={()=>act('play', {query:url})}>▶️ Afspelen</button>
+              <button className='btn' onClick={()=>act('add_playlist', {query:url})}>➕ Afspeellijst</button>
             </div>
 
-            <div style={{marginTop:14, fontWeight:800}}>Voice</div>
+            <div style={{marginTop:14, fontWeight:800}}>Spraakkanaal</div>
             <div className='row' style={{marginTop:8}}>
-              <select value={voiceId} onChange={e=>setVoiceId(e.target.value)}>
+              <select value={voiceId} onChange={e=>setSpraakkanaalId(e.target.value)}>
                 {voiceChannels.map(c=> <option key={c.id} value={c.id}>{c.name}</option>)
                 }
               </select>
-              <button className='btn' onClick={()=>act('join', {channel_id: String(voiceId)})}>Join</button>
-              <button className='btn danger' onClick={()=>act('disconnect')}>Disconnect</button>
-              <button className='btn' onClick={loadVoice}>↻</button>
+              <button className='btn' onClick={()=>act('join', {channel_id: String(voiceId)})}>Verbinden</button>
+              <button className='btn danger' onClick={()=>act('disconnect')}>Loskoppelen</button>
+              <button className='btn' onClick={loadSpraakkanaal}>↻</button>
             </div>
           </div>
           <div className='card col6'>
-            <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Queue</div>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Wachtrij</div>
             <div className='muted' style={{whiteSpace:'pre-wrap'}}>
               {(() => {
                 const q = (st && Array.isArray(st.queue)) ? st.queue : [];
@@ -573,7 +587,7 @@ def create_app(bot=None) -> FastAPI:
               })()}
             </div>
             <div className='row' style={{marginTop:12}}>
-              <button className='btn' onClick={()=>act('play_playlist')}>▶️ Play playlist</button>
+              <button className='btn' onClick={()=>act('play_playlist')}>▶️ Afspelen playlist</button>
               <button className='btn danger' onClick={()=>act('clear_playlist')}>🧹 Clear playlist</button>
             </div>
           </div>
@@ -581,7 +595,7 @@ def create_app(bot=None) -> FastAPI:
       );
     }
 
-    function Messages({setErr}){
+    function Berichten({setErr}){
       const [channels, setChannels] = useState([]);
       const [channelId, setChannelId] = useState('');
       const [content, setContent] = useState('');
@@ -637,7 +651,7 @@ def create_app(bot=None) -> FastAPI:
               <input placeholder='URL' value={embed.url} onChange={e=>setEmbed(s=>({...s,url:e.target.value}))}/>
             </div>
             <div style={{marginTop:8}}>
-              <textarea rows='4' placeholder='Description' value={embed.description} onChange={e=>setEmbed(s=>({...s,description:e.target.value}))}></textarea>
+              <textarea rows='4' placeholder='Beschrijving' value={embed.description} onChange={e=>setEmbed(s=>({...s,description:e.target.value}))}></textarea>
             </div>
             <div className='row' style={{marginTop:8}}>
               <input placeholder='Thumbnail URL' value={embed.thumbnail_url} onChange={e=>setEmbed(s=>({...s,thumbnail_url:e.target.value}))}/>
@@ -648,7 +662,7 @@ def create_app(bot=None) -> FastAPI:
               <input type='color' value={embed.color} onChange={e=>setEmbed(s=>({...s,color:e.target.value}))} style={{width:60,padding:0,height:42}}/>
             </div>
             <div className='row' style={{marginTop:12}}>
-              <button className='btn primary' onClick={send}>📨 Send</button>
+              <button className='btn primary' onClick={send}>📨 Versturen</button>
             </div>
             <div className='muted' style={{marginTop:8}}>Tip: embed preview rechts is een benadering; Discord kan net anders renderen.</div>
           </div>
@@ -707,7 +721,7 @@ def create_app(bot=None) -> FastAPI:
                 </div>
                 <div className='row'>
                   <input type='number' style={{width:90}} defaultValue={u.strikes} onBlur={e=>setStrike(u.user_id, e.target.value)} />
-                  <button className='btn danger' onClick={()=>setStrike(u.user_id, 0)}>Reset</button>
+                  <button className='btn danger' onClick={()=>setStrike(u.user_id, 0)}>Resetten</button>
                 </div>
               </div>
             ))}
@@ -739,7 +753,7 @@ def create_app(bot=None) -> FastAPI:
         try{
           const v = (draft[kind] || '').toString().trim();
           if(v==='') return;
-          await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: Number(v)})});
+          await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: v})});
           await load();
         }catch(e){ setErr(e.message); }
       };
@@ -756,7 +770,7 @@ def create_app(bot=None) -> FastAPI:
 
       return (
         <div className='card'>
-          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Counters</div>
+          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Tellers</div>
           <div className='muted' style={{marginBottom:10}}>
             Handmatige value wint altijd, behalve als de automatisch gefetchte value hoger is.
           </div>
@@ -767,9 +781,9 @@ def create_app(bot=None) -> FastAPI:
                 <div>
                   <div style={{fontWeight:800}}>{it.kind}</div>
                   <div className='muted'>
-                    fetched: {(it.fetched === null || it.fetched === undefined) ? '—' : it.fetched}
-                    {' • '}manual: {(it.manual === null || it.manual === undefined) ? '—' : it.manual}
-                    {' • '}effective: {(it.effective === null || it.effective === undefined) ? '—' : it.effective}
+                    opgehaald: {(it.fetched === null || it.fetched === undefined) ? '—' : it.fetched}
+                    {' • '}handmatig: {(it.manual === null || it.manual === undefined) ? '—' : it.manual}
+                    {' • '}effectief: {(it.effective === null || it.effective === undefined) ? '—' : it.effective}
                   </div>
                 </div>
                 <div className='row'>
@@ -777,19 +791,19 @@ def create_app(bot=None) -> FastAPI:
                     type='number'
                     style={{width:140}}
                     value={(draft[it.kind] === undefined) ? '' : draft[it.kind]}
-                    placeholder='manual'
+                    placeholder='handmatig'
                     onChange={e=>setDraft(d=>({...d,[it.kind]:e.target.value}))}
                   />
-                  <button className='btn primary' onClick={()=>save(it.kind)}>Save</button>
-                  <button className='btn' onClick={()=>reset(it.kind)}>Reset</button>
+                  <button className='btn primary' onClick={()=>save(it.kind)}>Opslaan</button>
+                  <button className='btn' onClick={()=>reset(it.kind)}>Resetten</button>
                 </div>
               </div>
             </div>
           ))}
 
           <div className='row' style={{marginTop:12}}>
-            <button className='btn' onClick={load}>↻ Refresh</button>
-            <button className='btn' onClick={fetchNow}>🌐 Fetch now</button>
+            <button className='btn' onClick={load}>↻ Vernieuwen</button>
+            <button className='btn' onClick={fetchNow}>🌐 Nu ophalen</button>
           </div>
         </div>
       );
@@ -876,7 +890,7 @@ def create_app(bot=None) -> FastAPI:
       return (
         <div className='grid'>
           <div className='card col6'>
-            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Template</div>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Sjabloon</div>
             <div className='row' style={{alignItems:'center', gap:12}}>
               <img src='/static/vbucks-1000.jpg' alt='1000 V-Bucks' style={{width:72,height:72,borderRadius:12,objectFit:'cover',border:'1px solid #1f2937'}}/>
               <div>
@@ -889,7 +903,7 @@ def create_app(bot=None) -> FastAPI:
                 {channels.map(c=> <option key={c.id} value={c.id}>#{c.name}</option>)}
               </select>
               <input type='datetime-local' value={tpl.end_dt} onChange={e=>setTpl(t=>({...t, end_dt:e.target.value}))}/>
-              <input placeholder='Winners' type='number' value={tpl.winners} onChange={e=>setTpl(t=>({...t, winners:e.target.value}))}/>
+              <input placeholder='Winnaars' type='number' value={tpl.winners} onChange={e=>setTpl(t=>({...t, winners:e.target.value}))}/>
             </div>
             <div className='row' style={{marginTop:10}}>
               <button className='btn primary' onClick={createTpl}>🎁 Create template giveaway</button>
@@ -908,7 +922,7 @@ def create_app(bot=None) -> FastAPI:
               <input placeholder='Eind (30m, 2h, 1d, 19:00, 2026-01-12 19:00)' value={form.end_in} onChange={e=>setForm(f=>({...f, end_in:e.target.value}))}/>
             </div>
             <div className='row' style={{marginTop:10}}>
-              <input placeholder='Winners' type='number' value={form.winners} onChange={e=>setForm(f=>({...f, winners:e.target.value}))}/>
+              <input placeholder='Winnaars' type='number' value={form.winners} onChange={e=>setForm(f=>({...f, winners:e.target.value}))}/>
               <input placeholder='Max deelnemers (optioneel)' value={form.max_participants} onChange={e=>setForm(f=>({...f, max_participants:e.target.value}))}/>
             </div>
             <div className='row' style={{marginTop:10, alignItems:'center'}}>
@@ -918,7 +932,7 @@ def create_app(bot=None) -> FastAPI:
                 try{
                   const b64 = await fileToB64(file);
                   setForm(f=>({...f, thumbnail_b64: b64, thumbnail_name: file.name}));
-                }catch(err){ setErr('Upload failed'); }
+                }catch(err){ setErr('Upload mislukt'); }
               }}/>
               <button className='btn' onClick={()=>setForm(f=>({...f, thumbnail_b64:'', thumbnail_name:''}))}>🗑️ Clear image</button>
             </div>
@@ -963,7 +977,7 @@ def create_app(bot=None) -> FastAPI:
                 <div style={{fontWeight:800}}>{w.user_tag || w.user_id}</div>
                 <div className='muted'>warns: {w.warns}</div>
               </div>
-              <button className='btn danger' onClick={()=>clear(w.user_id)}>Reset</button>
+              <button className='btn danger' onClick={()=>clear(w.user_id)}>Resetten</button>
             </div>
           ))}
         </div>
@@ -1051,8 +1065,10 @@ def create_app(bot=None) -> FastAPI:
         if not guild:
             return {"items": []}
         items = []
+        # Some discord libs / versions may not expose StageChannel.
+        StageChannel = getattr(discord, "StageChannel", None)
         for ch in guild.channels:
-            if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+            if isinstance(ch, discord.VoiceChannel) or (StageChannel and isinstance(ch, StageChannel)):
                 items.append({"id": str(ch.id), "name": ch.name})
         # Keep stable ordering
         items.sort(key=lambda x: x.get("name") or "")
@@ -1162,6 +1178,21 @@ def create_app(bot=None) -> FastAPI:
             return _error(400, "Invalid value")
         gid = getattr(bot, "guild_id", 0)
         bot.db.set_counter_override(gid, kind, max(0, value))
+        # Apply immediately
+        try:
+            cog = bot.get_cog('Counters') if bot else None
+            if cog:
+                import asyncio
+                asyncio.create_task(cog.dashboard_fetch(gid))
+        except Exception:
+            pass
+        # Return updated list
+        try:
+            cog = bot.get_cog('Counters') if bot else None
+            if cog:
+                return cog.dashboard_counters(gid)
+        except Exception:
+            pass
         return {"ok": True}
 
     @app.post("/api/counters/clear")
@@ -1176,6 +1207,20 @@ def create_app(bot=None) -> FastAPI:
             return _error(400, "Invalid kind")
         gid = getattr(bot, "guild_id", 0)
         bot.db.clear_counter_override(gid, kind)
+        # Apply immediately
+        try:
+            cog = bot.get_cog('Counters') if bot else None
+            if cog:
+                import asyncio
+                asyncio.create_task(cog.dashboard_fetch(gid))
+        except Exception:
+            pass
+        try:
+            cog = bot.get_cog('Counters') if bot else None
+            if cog:
+                return cog.dashboard_counters(gid)
+        except Exception:
+            pass
         return {"ok": True}
 
     @app.post("/api/counters/fetch")
@@ -1359,7 +1404,7 @@ def create_app(bot=None) -> FastAPI:
 
 
 
-    # --- Playlist (default) ---
+    # --- Afspelenlist (default) ---
     @app.get("/api/playlist/tracks")
     async def api_playlist_tracks(req: Request):
         try:
