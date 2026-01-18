@@ -5,8 +5,16 @@ import json
 
 class DB:
     def __init__(self, path: str):
-        self.conn = sqlite3.connect(path)
+        # The bot and the FastAPI dashboard can touch the DB from different threads.
+        # Disable SQLite's thread check so the dashboard doesn't crash on any action.
+        # For this project (low write concurrency) this is sufficient.
+        self.conn = sqlite3.connect(path, check_same_thread=False, timeout=30)
         self.conn.row_factory = sqlite3.Row
+        try:
+            # Better concurrent read/write behavior
+            self.conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            pass
         self._init()
 
     def _init(self) -> None:

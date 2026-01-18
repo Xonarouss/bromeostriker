@@ -973,7 +973,9 @@ class Music(commands.Cog):
 
     async def _extract_track(self, query: str, requester_id: int | None = None) -> Track:
         # Small helper for dashboard enqueue/playlist
-        loop = asyncio.get_event_loop()
+        # In Py3.11+, get_event_loop() can fail depending on context;
+        # within a coroutine we always want the running loop.
+        loop = asyncio.get_running_loop()
         ytdl = yt_dlp.YoutubeDL({**BASE_YTDL_OPTS, "ffmpeg_location": self.ffmpeg_path})
         info = await loop.run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
         if "entries" in info and isinstance(info["entries"], list) and info["entries"]:
