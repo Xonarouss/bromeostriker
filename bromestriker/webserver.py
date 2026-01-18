@@ -8,6 +8,8 @@ from urllib.parse import urlencode
 import threading
 
 import httpx
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, HTMLResponse, PlainTextResponse, JSONResponse
 
@@ -190,7 +192,26 @@ async def refresh_tiktok_access_token_if_needed() -> Optional[str]:
 
 
 def create_app(bot=None) -> FastAPI:
-    app = FastAPI(title="BromeStriker OAuth")
+    app = FastAPI(title="BromeoStriker Dashboard")
+
+    # Serve dashboard static assets (favicons, logos, etc.)
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.isdir(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/favicon.ico")
+    async def favicon_ico():
+        p = os.path.join(static_dir, "favicon.ico")
+        if os.path.exists(p):
+            return FileResponse(p)
+        return PlainTextResponse("", status_code=404)
+
+    @app.get("/site.webmanifest")
+    async def webmanifest():
+        p = os.path.join(static_dir, "site.webmanifest")
+        if os.path.exists(p):
+            return FileResponse(p, media_type="application/manifest+json")
+        return PlainTextResponse("", status_code=404)
 
 
     # -----------------------------
@@ -358,7 +379,13 @@ def create_app(bot=None) -> FastAPI:
 <head>
   <meta charset='utf-8' />
   <meta name='viewport' content='width=device-width, initial-scale=1' />
-  <title>BromeStriker Dashboard</title>
+  <title>BromeoStriker Dashboard</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" href="/static/favicon-32x32.png" sizes="32x32">
+  <link rel="icon" type="image/png" href="/static/favicon-16x16.png" sizes="16x16">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <meta name="theme-color" content="#0b1220">
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
@@ -417,7 +444,7 @@ def create_app(bot=None) -> FastAPI:
             <div className='card'>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                 <div>
-                  <div style={{fontSize:22,fontWeight:800}}>BromeStriker Dashboard</div>
+                  <div style={{fontSize:22,fontWeight:800}}>BromeoStriker Dashboard</div>
                   <div className='muted'>Login met Discord om verder te gaan.</div>
                 </div>
                 <a className='btn primary' href='/auth/login'>Login</a>
@@ -444,7 +471,7 @@ def create_app(bot=None) -> FastAPI:
       return (
         <div>
           <div className='top'>
-            <div className='brand'>BromeStriker Dashboard</div>
+            <div className='brand'>BromeoStriker Dashboard</div>
             <div className='row'>
               <div className='muted'>Ingelogd als {me.username}</div>
               <a className='btn' href='/logout'>Logout</a>
@@ -452,13 +479,16 @@ def create_app(bot=None) -> FastAPI:
           </div>
           <div className='wrap'>
             <div className='tabs'>
-              {['music','giveaways','warns','mutes'].map(k=> (
+              {['music','messages','giveaways','strikes','counters','warns','mutes'].map(k=> (
                 <div key={k} className={'tab '+(tab===k?'active':'')} onClick={()=>setTab(k)}>{k}</div>
               ))}
             </div>
             {err && <div className='card danger'>❌ {err}</div>}
             {tab==='music' && <Music setErr={setErr} />}
+            {tab==='messages' && <Messages setErr={setErr} />}
             {tab==='giveaways' && <Giveaways setErr={setErr} />}
+            {tab==='strikes' && <Strikes setErr={setErr} />}
+            {tab==='counters' && <Counters setErr={setErr} />}
             {tab==='warns' && <Warns setErr={setErr} />}
             {tab==='mutes' && <Mutes setErr={setErr} />}
           </div>
@@ -484,7 +514,13 @@ def create_app(bot=None) -> FastAPI:
         <div className='grid'>
           <div className='card col6'>
             <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Now Playing</div>
-            <div className='muted'>{(st && st.now) ? st.now : '—'}</div>
+            <div className='muted'>
+              {(st && st.now && (typeof st.now === 'object')) ? (
+                <a href={st.now.webpage_url || '#'} target='_blank' rel='noreferrer'>
+                  {st.now.title || '—'}
+                </a>
+              ) : ((st && st.now) ? String(st.now) : '—')}
+            </div>
             <div className='row' style={{marginTop:12}}>
               <button className='btn' onClick={()=>act('pause_resume')}>⏯️</button>
               <button className='btn primary' onClick={()=>act('skip')}>⏭️ Skip</button>
@@ -500,11 +536,199 @@ def create_app(bot=None) -> FastAPI:
           </div>
           <div className='card col6'>
             <div style={{fontSize:18,fontWeight:800, marginBottom:6}}>Queue</div>
-            <div className='muted' style={{whiteSpace:'pre-wrap'}}>{((st && st.queue) ? st.queue : []).join('\\n') || '—'}</div>
+            <div className='muted' style={{whiteSpace:'pre-wrap'}}>
+              {(() => {
+                const q = (st && Array.isArray(st.queue)) ? st.queue : [];
+                if (!q.length) return '—';
+                return q.map((it, idx) => {
+                  if (it && typeof it === 'object') {
+                    return (
+                      <div key={idx}>
+                        <a href={it.webpage_url || '#'} target='_blank' rel='noreferrer'>{it.title || '—'}</a>
+                      </div>
+                    );
+                  }
+                  return <div key={idx}>{String(it)}</div>;
+                });
+              })()}
+            </div>
             <div className='row' style={{marginTop:12}}>
               <button className='btn' onClick={()=>act('play_playlist')}>▶️ Play playlist</button>
               <button className='btn danger' onClick={()=>act('clear_playlist')}>🧹 Clear playlist</button>
             </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Messages({setErr}){
+      const [channels, setChannels] = useState([]);
+      const [channelId, setChannelId] = useState('');
+      const [content, setContent] = useState('');
+      const [embed, setEmbed] = useState({title:'', description:'', url:'', color:'#16a34a', thumbnail_url:'', image_url:'', footer:''});
+
+      const load = async()=>{
+        setErr('');
+        try{
+          const ch = await api('/api/channels');
+          setChannels(ch.items||[]);
+          if(!channelId && (ch.items||[]).length) setChannelId(String(ch.items[0].id));
+        }catch(e){ setErr(e.message); }
+      };
+      useEffect(()=>{ load(); },[]);
+
+      const send = async()=>{
+        setErr('');
+        try{
+          await api('/api/messages/send', {
+            method:'POST',
+            body: JSON.stringify({
+              channel_id: Number(channelId),
+              content,
+              embed: {
+                ...embed,
+                color: (embed.color||'').replace('#','')
+              }
+            })
+          });
+          setContent('');
+        }catch(e){ setErr(e.message); }
+      };
+
+      const hasEmbed = Object.values(embed).some(v=>String(v||'').trim()!=='' && v!=='#16a34a');
+
+      return (
+        <div className='grid'>
+          <div className='card col6'>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Bericht versturen</div>
+            <div className='row'>
+              <select value={channelId} onChange={e=>setChannelId(e.target.value)}>
+                {channels.map(c=> <option key={c.id} value={c.id}>#{c.name}</option>)}
+              </select>
+            </div>
+            <div style={{marginTop:10}}>
+              <textarea rows='4' placeholder='Message content (optioneel)' value={content} onChange={e=>setContent(e.target.value)}></textarea>
+            </div>
+            <div style={{marginTop:12,fontWeight:800}}>Embed (optioneel)</div>
+            <div className='row' style={{marginTop:8}}>
+              <input placeholder='Title' value={embed.title} onChange={e=>setEmbed(s=>({...s,title:e.target.value}))}/>
+              <input placeholder='URL' value={embed.url} onChange={e=>setEmbed(s=>({...s,url:e.target.value}))}/>
+            </div>
+            <div style={{marginTop:8}}>
+              <textarea rows='4' placeholder='Description' value={embed.description} onChange={e=>setEmbed(s=>({...s,description:e.target.value}))}></textarea>
+            </div>
+            <div className='row' style={{marginTop:8}}>
+              <input placeholder='Thumbnail URL' value={embed.thumbnail_url} onChange={e=>setEmbed(s=>({...s,thumbnail_url:e.target.value}))}/>
+              <input placeholder='Image URL' value={embed.image_url} onChange={e=>setEmbed(s=>({...s,image_url:e.target.value}))}/>
+            </div>
+            <div className='row' style={{marginTop:8}}>
+              <input placeholder='Footer' value={embed.footer} onChange={e=>setEmbed(s=>({...s,footer:e.target.value}))}/>
+              <input type='color' value={embed.color} onChange={e=>setEmbed(s=>({...s,color:e.target.value}))} style={{width:60,padding:0,height:42}}/>
+            </div>
+            <div className='row' style={{marginTop:12}}>
+              <button className='btn primary' onClick={send}>📨 Send</button>
+            </div>
+            <div className='muted' style={{marginTop:8}}>Tip: embed preview rechts is een benadering; Discord kan net anders renderen.</div>
+          </div>
+
+          <div className='card col6'>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Preview</div>
+            <div className='card' style={{borderLeft:`4px solid ${embed.color||'#16a34a'}`, padding:12}}>
+              {content && <div style={{marginBottom:10}}>{content}</div>}
+              {hasEmbed ? (
+                <div>
+                  {embed.title && (
+                    embed.url ? <a href={embed.url} target='_blank' rel='noreferrer' style={{fontWeight:800,fontSize:16}}>{embed.title}</a>
+                              : <div style={{fontWeight:800,fontSize:16}}>{embed.title}</div>
+                  )}
+                  {embed.description && <div className='muted' style={{marginTop:6,whiteSpace:'pre-wrap'}}>{embed.description}</div>}
+                  {embed.image_url && <img src={embed.image_url} alt='' style={{marginTop:10,maxWidth:'100%',borderRadius:12}} />}
+                  {embed.footer && <div className='muted' style={{marginTop:10,fontSize:12}}>{embed.footer}</div>}
+                </div>
+              ) : (
+                <div className='muted'>—</div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Strikes({setErr}){
+      const [q, setQ] = useState('');
+      const [items, setItems] = useState([]);
+      const search = async()=>{
+        setErr('');
+        try{
+          const res = await api(`/api/strikes/search?q=${encodeURIComponent(q)}`);
+          setItems(res.items||[]);
+        }catch(e){ setErr(e.message); }
+      };
+      const setStrike = async(uid, val)=>{
+        setErr('');
+        try{ await api('/api/strikes/set', {method:'POST', body: JSON.stringify({user_id: uid, strikes: Number(val)})}); await search(); }catch(e){ setErr(e.message); }
+      };
+      return (
+        <div className='card'>
+          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Strikes zoeken</div>
+          <div className='row'>
+            <input placeholder='Zoek op naam of user id…' value={q} onChange={e=>setQ(e.target.value)}/>
+            <button className='btn primary' onClick={search}>🔎 Search</button>
+          </div>
+          <div className='muted' style={{marginTop:8}}>Resultaten tonen wat er in de DB staat. Gebruik “set” om te corrigeren.</div>
+          <div style={{marginTop:12}}>
+            {items.length===0 ? <div className='muted'>—</div> : items.map(u=> (
+              <div key={u.user_id} className='row' style={{justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
+                <div>
+                  <div style={{fontWeight:800}}>{u.user_tag || u.user_id}</div>
+                  <div className='muted'>strikes: {u.strikes}</div>
+                </div>
+                <div className='row'>
+                  <input type='number' style={{width:90}} defaultValue={u.strikes} onBlur={e=>setStrike(u.user_id, e.target.value)} />
+                  <button className='btn danger' onClick={()=>setStrike(u.user_id, 0)}>Reset</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function Counters({setErr}){
+      const [items, setItems] = useState([]);
+      const load = async()=>{
+        setErr('');
+        try{ const r = await api('/api/counters'); setItems(r.items||[]); }catch(e){ setErr(e.message); }
+      };
+      useEffect(()=>{ load(); },[]);
+      const save = async(kind, val)=>{
+        setErr('');
+        try{ await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: Number(val)})}); await load(); }catch(e){ setErr(e.message); }
+      };
+      const clear = async(kind)=>{
+        setErr('');
+        try{ await api('/api/counters/clear', {method:'POST', body: JSON.stringify({kind})}); await load(); }catch(e){ setErr(e.message); }
+      };
+      return (
+        <div className='card'>
+          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Counters overrides</div>
+          <div className='muted' style={{marginBottom:10}}>
+            Handmatige value wint altijd, behalve als de automatisch gefetchte value hoger is.
+          </div>
+          {items.map(it=> (
+            <div key={it.kind} className='row' style={{justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
+              <div>
+                <div style={{fontWeight:800}}>{it.kind}</div>
+                <div className='muted'>fetched: {it.fetched ?? '—'} • manual: {it.manual ?? '—'} • effective: {it.effective ?? '—'}</div>
+              </div>
+              <div className='row'>
+                <input type='number' style={{width:120}} defaultValue={it.manual ?? ''} placeholder='manual' onBlur={e=>{ const v=e.target.value; if(v==='') return; save(it.kind, v); }} />
+                <button className='btn' onClick={()=>clear(it.kind)}>Clear</button>
+              </div>
+            </div>
+          ))}
+          <div className='row' style={{marginTop:12}}>
+            <button className='btn' onClick={load}>↻ Refresh</button>
           </div>
         </div>
       );
@@ -670,6 +894,121 @@ def create_app(bot=None) -> FastAPI:
                 items.append({"id": ch.id, "name": ch.name})
         return {"items": items}
 
+    # --- Message sender (Mee6-style) ---
+    @app.post("/api/messages/send")
+    async def api_messages_send(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        body = await req.json()
+        channel_id = int(body.get("channel_id") or 0)
+        content = (body.get("content") or "").rstrip()
+        embed_in = body.get("embed") or None
+        if not channel_id:
+            return _error(400, "channel_id missing")
+        if not bot:
+            return _error(400, "Bot not ready")
+
+        ch = bot.get_channel(channel_id)
+        if ch is None:
+            try:
+                ch = await bot.fetch_channel(channel_id)
+            except Exception:
+                ch = None
+        if ch is None or not hasattr(ch, "send"):
+            return _error(400, "Channel not found or not sendable")
+
+        discord_embed = None
+        try:
+            import discord
+            if isinstance(embed_in, dict):
+                title = (embed_in.get("title") or "").strip() or None
+                description = (embed_in.get("description") or "").strip() or None
+                url = (embed_in.get("url") or "").strip() or None
+                color_hex = (embed_in.get("color") or "").strip().lstrip("#")
+                color = None
+                if color_hex:
+                    try:
+                        color = int(color_hex, 16)
+                    except Exception:
+                        color = None
+                discord_embed = discord.Embed(title=title, description=description, url=url, color=color)
+                thumb = (embed_in.get("thumbnail_url") or "").strip()
+                if thumb:
+                    discord_embed.set_thumbnail(url=thumb)
+                img = (embed_in.get("image_url") or "").strip()
+                if img:
+                    discord_embed.set_image(url=img)
+                footer = (embed_in.get("footer") or "").strip()
+                if footer:
+                    discord_embed.set_footer(text=footer)
+                # If embed has no meaningful content, drop it.
+                if not any([title, description, url, thumb, img, footer]):
+                    discord_embed = None
+        except Exception:
+            discord_embed = None
+
+        if not content and discord_embed is None:
+            return _error(400, "Empty message")
+
+        await ch.send(content=content or None, embed=discord_embed)
+        return {"ok": True}
+
+    # --- Counters overrides ---
+    @app.get("/api/counters")
+    async def api_counters(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        cog = bot.get_cog('Counters') if bot else None
+        if not cog:
+            # still allow reading manual overrides from DB
+            items = []
+            for kind in ["members","twitch","instagram","tiktok"]:
+                try:
+                    manual = bot.db.get_counter_override(gid, kind)
+                except Exception:
+                    manual = None
+                items.append({"kind": kind, "fetched": None, "manual": manual, "effective": manual})
+            return {"items": items}
+        return cog.dashboard_counters(gid)
+
+    @app.post("/api/counters/override")
+    async def api_counters_override(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        body = await req.json()
+        kind = str(body.get("kind") or "").strip().lower()
+        value = body.get("value")
+        if kind not in {"members","twitch","instagram","tiktok"}:
+            return _error(400, "Invalid kind")
+        try:
+            value = int(value)
+        except Exception:
+            return _error(400, "Invalid value")
+        gid = getattr(bot, "guild_id", 0)
+        bot.db.set_counter_override(gid, kind, max(0, value))
+        return {"ok": True}
+
+    @app.post("/api/counters/clear")
+    async def api_counters_clear(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        body = await req.json()
+        kind = str(body.get("kind") or "").strip().lower()
+        if kind not in {"members","twitch","instagram","tiktok"}:
+            return _error(400, "Invalid kind")
+        gid = getattr(bot, "guild_id", 0)
+        bot.db.clear_counter_override(gid, kind)
+        return {"ok": True}
+
     @app.get("/api/warns")
     async def api_warns(req: Request):
         try:
@@ -690,6 +1029,66 @@ def create_app(bot=None) -> FastAPI:
                     tag = str(m)
             items.append({"user_id": uid, "warns": int(r["warns"]), "user_tag": tag})
         return {"items": items}
+
+    # --- Strikes ---
+    @app.get("/api/strikes/search")
+    async def api_strikes_search(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+
+        q = (req.query_params.get("q") or "").strip()
+        gid = getattr(bot, "guild_id", 0)
+        guild = bot.get_guild(gid) if bot else None
+
+        def _match(member) -> bool:
+            if not q:
+                return False
+            if q.isdigit():
+                return int(q) == int(member.id)
+            name = f"{member.name}#{member.discriminator}" if getattr(member, "discriminator", None) else member.name
+            return q.lower() in name.lower()
+
+        results = []
+        if guild:
+            # Prefer cached members. For very large guilds this may be partial, but it's fast.
+            for m in guild.members:
+                if _match(m):
+                    results.append(m)
+                if len(results) >= 25:
+                    break
+        # If query is digits, we can return even if not cached
+        if q.isdigit() and guild:
+            uid = int(q)
+            if not any(int(m.id) == uid for m in results):
+                try:
+                    m = guild.get_member(uid) or await guild.fetch_member(uid)
+                    results = [m]
+                except Exception:
+                    results = []
+
+        items = []
+        if bot:
+            cur = bot.db.conn.cursor()
+            for m in results:
+                row = cur.execute("SELECT strikes FROM strikes WHERE guild_id=? AND user_id=?", (gid, int(m.id))).fetchone()
+                strikes = int(row[0]) if row else 0
+                items.append({"user_id": int(m.id), "user_tag": str(m), "strikes": strikes})
+        return {"items": items}
+
+    @app.post("/api/strikes/set")
+    async def api_strikes_set(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        body = await req.json()
+        uid = int(body.get("user_id"))
+        strikes = max(0, int(body.get("strikes") or 0))
+        gid = getattr(bot, "guild_id", 0)
+        bot.db.set_strikes(gid, uid, strikes)
+        return {"ok": True}
 
     @app.post("/api/warns/clear")
     async def api_warns_clear(req: Request):

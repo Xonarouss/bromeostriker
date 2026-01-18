@@ -95,6 +95,10 @@ class Counters(commands.Cog):
         # key: (guild_id, kind) -> last int
         self._last_counter_values: Dict[tuple[int, str], int] = {}
 
+        # Last fetched (raw) values for dashboard visibility.
+        # key: (guild_id, kind) -> last fetched int (before overrides/stability)
+        self._last_fetched_values: Dict[tuple[int, str], int] = {}
+
         # config
         self.category_name = (os.getenv("COUNTER_CATEGORY_NAME") or "📊 Counters").strip()
 
@@ -570,10 +574,19 @@ class Counters(commands.Cog):
             if ch:
                 ch_by_kind[str(r["kind"])]= ch
 
-        members = guild.member_count
+        members = int(guild.member_count or 0)
         twitch = await self._get_twitch_followers()
         instagram_raw = await self._get_instagram_followers()
         tiktok_raw = await self._get_tiktok_followers()
+
+        # Store last fetched values (before stability/overrides)
+        self._last_fetched_values[(guild.id, "members")] = members
+        if twitch is not None:
+            self._last_fetched_values[(guild.id, "twitch")] = int(twitch)
+        if instagram_raw is not None:
+            self._last_fetched_values[(guild.id, "instagram")] = int(instagram_raw)
+        if tiktok_raw is not None:
+            self._last_fetched_values[(guild.id, "tiktok")] = int(tiktok_raw)
 
         # If Instagram scraping fails before we ever got a good value, seed from COUNTER_INSTAGRAM_STATIC
         if instagram_raw is None and getattr(self, "instagram_static", None) is not None:
@@ -585,11 +598,52 @@ class Counters(commands.Cog):
         instagram = self._stable_count(guild.id, "instagram", instagram_raw)
         tiktok = self._stable_count(guild.id, "tiktok", tiktok_raw)
 
-        await self._maybe_rename(ch_by_kind.get("members"), self.tpl_members, members, fmt=_fmt_nl)
-        await self._maybe_rename(ch_by_kind.get("twitch"), self.tpl_twitch, twitch, fmt=_fmt_nl)
+        def _resolve(kind: str, fetched: Optional[int]) -> Optional[int]:
+            """Manual override wins unless fetched is higher."""
+            try:
+                manual = self.bot.db.get_counter_override(guild.id, kind)  # type: ignore[attr-defined]
+            except Exception:
+                manual = None
+            if manual is None:
+                return fetched
+            if fetched is None:
+                return int(manual)
+            return int(fetched) if int(fetched) > int(manual) else int(manual)
+
+        members_eff = _resolve("members", members)
+        twitch_eff = _resolve("twitch", int(twitch) if twitch is not None else None)
+        instagram_eff = _resolve("instagram", instagram)
+        tiktok_eff = _resolve("tiktok", tiktok)
+
+        await self._maybe_rename(ch_by_kind.get("members"), self.tpl_members, members_eff, fmt=_fmt_nl)
+        await self._maybe_rename(ch_by_kind.get("twitch"), self.tpl_twitch, twitch_eff, fmt=_fmt_nl)
         # Social counters: compact K-format at >= 10k
-        await self._maybe_rename(ch_by_kind.get("instagram"), self.tpl_instagram, instagram, fmt=_fmt_social)
-        await self._maybe_rename(ch_by_kind.get("tiktok"), self.tpl_tiktok, tiktok, fmt=_fmt_social)
+        await self._maybe_rename(ch_by_kind.get("instagram"), self.tpl_instagram, instagram_eff, fmt=_fmt_social)
+        await self._maybe_rename(ch_by_kind.get("tiktok"), self.tpl_tiktok, tiktok_eff, fmt=_fmt_social)
+
+    # -------------------------
+    # Dashboard helpers
+    # -------------------------
+    def dashboard_counters(self, guild_id: int) -> dict:
+        """Return counters with manual overrides + last fetched + effective."""
+        kinds = ["members", "twitch", "instagram", "tiktok"]
+        out = []
+        for kind in kinds:
+            fetched = self._last_fetched_values.get((int(guild_id), kind))
+            try:
+                manual = self.bot.db.get_counter_override(int(guild_id), kind)  # type: ignore[attr-defined]
+            except Exception:
+                manual = None
+            effective = None
+            if manual is None:
+                effective = fetched
+            else:
+                if fetched is None:
+                    effective = int(manual)
+                else:
+                    effective = int(fetched) if int(fetched) > int(manual) else int(manual)
+            out.append({"kind": kind, "fetched": fetched, "manual": manual, "effective": effective})
+        return {"items": out}
 
     async def _maybe_rename(self, ch: Optional[discord.abc.GuildChannel], template: str, count: Optional[int], fmt=_fmt_nl) -> None:
         if ch is None:

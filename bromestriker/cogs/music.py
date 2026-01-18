@@ -873,7 +873,18 @@ class Music(commands.Cog):
 
     async def dashboard_action(self, guild_id: int, actor_user_id: int, payload: dict) -> None:
         action = (payload.get("action") or "").strip().lower()
-        url = (payload.get("url") or "").strip()
+
+        # Dashboard frontends historically used different action names.
+        # Keep backwards compatibility so the UI can be updated independently.
+        aliases = {
+            "pause_resume": "toggle",
+            "play": "enqueue",
+            "add_playlist": "playlist_add",
+        }
+        action = aliases.get(action, action)
+
+        # Accept both `url` and `query` payload keys.
+        url = (payload.get("url") or payload.get("query") or "").strip()
         g = self.bot.get_guild(guild_id)
         if not g:
             return
@@ -939,6 +950,25 @@ class Music(commands.Cog):
             if url:
                 track = await self._extract_track(url, requester_id=actor_user_id)
                 self.bot.db.add_playlist_track(pl_id, track.title, track.url, track.webpage_url, added_by=actor_user_id)
+            return
+
+        if action == "play_playlist":
+            pl_id = self.bot.db.get_or_create_playlist(guild_id, name="default", created_by=actor_user_id)
+            rows = self.bot.db.list_playlist_tracks(pl_id, limit=200)
+            # rows are ordered DESC (newest first) -> enqueue reversed so it plays oldest first
+            for r in reversed(rows):
+                try:
+                    track = await self._extract_track(str(r["url"]), requester_id=actor_user_id)
+                    await player.queue.put(track)
+                except Exception:
+                    continue
+            if rows and (player._task is None or player._task.done()):
+                player._task = asyncio.create_task(self._player_loop(guild_id))
+            return
+
+        if action == "clear_playlist":
+            pl_id = self.bot.db.get_or_create_playlist(guild_id, name="default", created_by=actor_user_id)
+            self.bot.db.clear_playlist_tracks(pl_id)
             return
 
     async def _extract_track(self, query: str, requester_id: int | None = None) -> Track:

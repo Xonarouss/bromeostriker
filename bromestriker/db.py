@@ -61,6 +61,22 @@ class DB:
         );
         """)
 
+        # Manual overrides for counters.
+        # If set, the dashboard can force a number. The bot will still fetch automatically,
+        # but the effective value is:
+        #   manual_override wins UNLESS the fetched value is higher.
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS counter_overrides (
+            guild_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, kind)
+        );
+        """
+        )
+
         # --- giveaways ---
         cur.execute("""
         CREATE TABLE IF NOT EXISTS giveaways (
@@ -242,6 +258,49 @@ class DB:
             """,
             (guild_id, kind, channel_id, category_id, now, now),
         )
+        self.conn.commit()
+
+    # --- counter overrides ---
+    def get_counter_override(self, guild_id: int, kind: str) -> Optional[int]:
+        cur = self.conn.cursor()
+        row = cur.execute(
+            "SELECT value FROM counter_overrides WHERE guild_id=? AND kind=?",
+            (int(guild_id), str(kind)),
+        ).fetchone()
+        return int(row[0]) if row else None
+
+    def set_counter_override(self, guild_id: int, kind: str, value: int) -> None:
+        now = int(time.time())
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO counter_overrides (guild_id, kind, value, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id, kind) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (int(guild_id), str(kind), int(value), now),
+        )
+        self.conn.commit()
+
+    def clear_counter_override(self, guild_id: int, kind: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM counter_overrides WHERE guild_id=? AND kind=?",
+            (int(guild_id), str(kind)),
+        )
+        self.conn.commit()
+
+    def list_counter_overrides(self, guild_id: int) -> list[sqlite3.Row]:
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT kind, value, updated_at FROM counter_overrides WHERE guild_id=? ORDER BY kind ASC",
+            (int(guild_id),),
+        ).fetchall()
+
+    # --- playlist tracks helpers ---
+    def clear_playlist_tracks(self, playlist_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (int(playlist_id),))
         self.conn.commit()
 
     def delete_counter(self, guild_id: int, kind: str) -> None:
