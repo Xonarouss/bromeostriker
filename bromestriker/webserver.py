@@ -893,7 +893,9 @@ def create_app(bot=None) -> FastAPI:
         items = []
         if guild:
             for ch in guild.text_channels:
-                items.append({"id": ch.id, "name": ch.name})
+                # Discord IDs are snowflakes (often larger than JS safe integers).
+                # Return them as strings so the dashboard doesn't lose precision.
+                items.append({"id": str(ch.id), "name": ch.name})
         return {"items": items}
 
     # --- Message sender (Mee6-style) ---
