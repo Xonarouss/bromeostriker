@@ -499,11 +499,20 @@ def create_app(bot=None) -> FastAPI:
     function Music({setErr}){
       const [st, setSt] = useState(null);
       const [url, setUrl] = useState('');
+      const [voiceChannels, setVoiceChannels] = useState([]);
+      const [voiceId, setVoiceId] = useState('');
       const load = async()=>{
         setErr('');
         try{ setSt(await api('/api/music/status')); }catch(e){ setErr(e.message); }
       };
-      useEffect(()=>{ load(); const t=setInterval(load, 4000); return ()=>clearInterval(t); },[]);
+      const loadVoice = async()=>{
+        try{
+          const r = await api('/api/voice_channels');
+          setVoiceChannels(r.items||[]);
+          if(!voiceId && (r.items||[]).length) setVoiceId(String(r.items[0].id));
+        }catch(e){}
+      };
+      useEffect(()=>{ load(); loadVoice(); const t=setInterval(load, 4000); return ()=>clearInterval(t); },[]);
 
       const act = async(action, payload={})=>{
         setErr('');
@@ -532,6 +541,17 @@ def create_app(bot=None) -> FastAPI:
               <input placeholder='YouTube link of zoekterm…' value={url} onChange={e=>setUrl(e.target.value)} />
               <button className='btn primary' onClick={()=>act('play', {query:url})}>▶️ Play</button>
               <button className='btn' onClick={()=>act('add_playlist', {query:url})}>➕ Playlist</button>
+            </div>
+
+            <div style={{marginTop:14, fontWeight:800}}>Voice</div>
+            <div className='row' style={{marginTop:8}}>
+              <select value={voiceId} onChange={e=>setVoiceId(e.target.value)}>
+                {voiceChannels.map(c=> <option key={c.id} value={c.id}>{c.name}</option>)
+                }
+              </select>
+              <button className='btn' onClick={()=>act('join', {channel_id: String(voiceId)})}>Join</button>
+              <button className='btn danger' onClick={()=>act('disconnect')}>Disconnect</button>
+              <button className='btn' onClick={loadVoice}>↻</button>
             </div>
           </div>
           <div className='card col6'>
@@ -698,39 +718,78 @@ def create_app(bot=None) -> FastAPI:
 
     function Counters({setErr}){
       const [items, setItems] = useState([]);
+      const [draft, setDraft] = useState({});
+
       const load = async()=>{
         setErr('');
-        try{ const r = await api('/api/counters'); setItems(r.items||[]); }catch(e){ setErr(e.message); }
+        try{
+          const r = await api('/api/counters');
+          const its = r.items || [];
+          setItems(its);
+          // seed drafts
+          const d = {};
+          its.forEach(it=>{ d[it.kind] = (it.manual === null || it.manual === undefined) ? '' : String(it.manual); });
+          setDraft(d);
+        }catch(e){ setErr(e.message); }
       };
       useEffect(()=>{ load(); },[]);
-      const save = async(kind, val)=>{
+
+      const save = async(kind)=>{
         setErr('');
-        try{ await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: Number(val)})}); await load(); }catch(e){ setErr(e.message); }
+        try{
+          const v = (draft[kind] || '').toString().trim();
+          if(v==='') return;
+          await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: Number(v)})});
+          await load();
+        }catch(e){ setErr(e.message); }
       };
-      const clear = async(kind)=>{
+
+      const reset = async(kind)=>{
         setErr('');
         try{ await api('/api/counters/clear', {method:'POST', body: JSON.stringify({kind})}); await load(); }catch(e){ setErr(e.message); }
       };
+
+      const fetchNow = async()=>{
+        setErr('');
+        try{ await api('/api/counters/fetch', {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
+      };
+
       return (
         <div className='card'>
-          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Counters overrides</div>
+          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Counters</div>
           <div className='muted' style={{marginBottom:10}}>
             Handmatige value wint altijd, behalve als de automatisch gefetchte value hoger is.
           </div>
+
           {items.map(it=> (
-            <div key={it.kind} className='row' style={{justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
-              <div>
-                <div style={{fontWeight:800}}>{it.kind}</div>
-                <div className='muted'>fetched: {(it.fetched === null || it.fetched === undefined) ? '—' : it.fetched} • manual: {(it.manual === null || it.manual === undefined) ? '—' : it.manual} • effective: {(it.effective === null || it.effective === undefined) ? '—' : it.effective}</div>
-              </div>
-              <div className='row'>
-                <input type='number' style={{width:120}} defaultValue={(it.manual === null || it.manual === undefined) ? '' : it.manual} placeholder='manual' onBlur={e=>{ const v=e.target.value; if(v==='') return; save(it.kind, v); }} />
-                <button className='btn' onClick={()=>clear(it.kind)}>Clear</button>
+            <div key={it.kind} style={{padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
+              <div className='row' style={{justifyContent:'space-between'}}>
+                <div>
+                  <div style={{fontWeight:800}}>{it.kind}</div>
+                  <div className='muted'>
+                    fetched: {(it.fetched === null || it.fetched === undefined) ? '—' : it.fetched}
+                    {' • '}manual: {(it.manual === null || it.manual === undefined) ? '—' : it.manual}
+                    {' • '}effective: {(it.effective === null || it.effective === undefined) ? '—' : it.effective}
+                  </div>
+                </div>
+                <div className='row'>
+                  <input
+                    type='number'
+                    style={{width:140}}
+                    value={(draft[it.kind] === undefined) ? '' : draft[it.kind]}
+                    placeholder='manual'
+                    onChange={e=>setDraft(d=>({...d,[it.kind]:e.target.value}))}
+                  />
+                  <button className='btn primary' onClick={()=>save(it.kind)}>Save</button>
+                  <button className='btn' onClick={()=>reset(it.kind)}>Reset</button>
+                </div>
               </div>
             </div>
           ))}
+
           <div className='row' style={{marginTop:12}}>
             <button className='btn' onClick={load}>↻ Refresh</button>
+            <button className='btn' onClick={fetchNow}>🌐 Fetch now</button>
           </div>
         </div>
       );
@@ -739,14 +798,30 @@ def create_app(bot=None) -> FastAPI:
     function Giveaways({setErr}){
       const [list, setList] = useState([]);
       const [channels, setChannels] = useState([]);
-      const [form, setForm] = useState({channel_id:'', prize:'', end:'30m', winners:1, max_participants:'', description:''});
+      const [form, setForm] = useState({channel_id:'', prize:'', end_in:'30m', winners:1, max_participants:'', description:'', thumbnail_b64:'', thumbnail_name:''});
+      const [tpl, setTpl] = useState({channel_id:'', end_dt:'', winners:1});
+
+      const fileToB64 = (file)=> new Promise((resolve, reject)=>{
+        const r = new FileReader();
+        r.onload = ()=>{
+          const s = String(r.result||'');
+          const idx = s.indexOf('base64,');
+          resolve(idx>=0 ? s.slice(idx+7) : s);
+        };
+        r.onerror = ()=>reject(new Error('file read failed'));
+        r.readAsDataURL(file);
+      });
 
       const load = async()=>{
         setErr('');
         try{
           const [a,b] = await Promise.all([api('/api/giveaways'), api('/api/channels')]);
           setList(a.items||[]); setChannels(b.items||[]);
-          if(!form.channel_id && (b.items||[]).length) setForm(f=>({...f, channel_id: String(b.items[0].id)}));
+          if((b.items||[]).length){
+            const first = String(b.items[0].id);
+            if(!form.channel_id) setForm(f=>({...f, channel_id: first}));
+            if(!tpl.channel_id) setTpl(t=>({...t, channel_id: first}));
+          }
         }catch(e){ setErr(e.message); }
       };
       useEffect(()=>{ load(); },[]);
@@ -754,7 +829,41 @@ def create_app(bot=None) -> FastAPI:
       const submit = async()=>{
         setErr('');
         try{
-          await api('/api/giveaways/create', {method:'POST', body: JSON.stringify({...form, winners: Number(form.winners||1), channel_id: Number(form.channel_id)})});
+          const payload = {
+            channel_id: String(form.channel_id),
+            prize: form.prize,
+            end_in: form.end_in,
+            winners: Number(form.winners||1),
+            description: form.description,
+            max_participants: (String(form.max_participants||'').trim()==='') ? null : Number(form.max_participants),
+            thumbnail_b64: form.thumbnail_b64 || null,
+            thumbnail_name: form.thumbnail_name || null,
+          };
+          await api('/api/giveaways/create', {method:'POST', body: JSON.stringify(payload)});
+          await load();
+        }catch(e){ setErr(e.message); }
+      };
+
+      const createTpl = async()=>{
+        setErr('');
+        try{
+          if(!tpl.end_dt) throw new Error('Vul een einddatum in');
+          const end_at = Math.floor(new Date(tpl.end_dt).getTime() / 1000);
+          if(!end_at) throw new Error('Ongeldige einddatum');
+          // Fetch the template icon from our own dashboard static folder and send as attachment.
+          const res = await fetch('/static/vbucks-1000.jpg');
+          const blob = await res.blob();
+          const b64 = await fileToB64(blob);
+          const payload = {
+            channel_id: String(tpl.channel_id),
+            prize: '1000 V-Bucks',
+            description: '🎁 1000 V-Bucks giveaway! Klik op **Deelnemen** om mee te doen.',
+            winners: Number(tpl.winners||1),
+            end_at,
+            thumbnail_b64: b64,
+            thumbnail_name: 'vbucks-1000.jpg',
+          };
+          await api('/api/giveaways/create', {method:'POST', body: JSON.stringify(payload)});
           await load();
         }catch(e){ setErr(e.message); }
       };
@@ -767,6 +876,27 @@ def create_app(bot=None) -> FastAPI:
       return (
         <div className='grid'>
           <div className='card col6'>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Template</div>
+            <div className='row' style={{alignItems:'center', gap:12}}>
+              <img src='/static/vbucks-1000.jpg' alt='1000 V-Bucks' style={{width:72,height:72,borderRadius:12,objectFit:'cover',border:'1px solid #1f2937'}}/>
+              <div>
+                <div style={{fontWeight:900}}>1000 V-Bucks Giveaway</div>
+                <div className='muted'>Vul alleen einddatum + aantal winnaars in.</div>
+              </div>
+            </div>
+            <div className='row' style={{marginTop:10}}>
+              <select value={tpl.channel_id} onChange={e=>setTpl(t=>({...t, channel_id:e.target.value}))}>
+                {channels.map(c=> <option key={c.id} value={c.id}>#{c.name}</option>)}
+              </select>
+              <input type='datetime-local' value={tpl.end_dt} onChange={e=>setTpl(t=>({...t, end_dt:e.target.value}))}/>
+              <input placeholder='Winners' type='number' value={tpl.winners} onChange={e=>setTpl(t=>({...t, winners:e.target.value}))}/>
+            </div>
+            <div className='row' style={{marginTop:10}}>
+              <button className='btn primary' onClick={createTpl}>🎁 Create template giveaway</button>
+            </div>
+          </div>
+
+          <div className='card col6'>
             <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Nieuwe giveaway</div>
             <div className='row'>
               <select value={form.channel_id} onChange={e=>setForm(f=>({...f, channel_id:e.target.value}))}>
@@ -775,11 +905,22 @@ def create_app(bot=None) -> FastAPI:
             </div>
             <div className='row' style={{marginTop:10}}>
               <input placeholder='Prijs' value={form.prize} onChange={e=>setForm(f=>({...f, prize:e.target.value}))}/>
-              <input placeholder='Eind (30m, 2h, 1d, 19:00, 2026-01-12 19:00)' value={form.end} onChange={e=>setForm(f=>({...f, end:e.target.value}))}/>
+              <input placeholder='Eind (30m, 2h, 1d, 19:00, 2026-01-12 19:00)' value={form.end_in} onChange={e=>setForm(f=>({...f, end_in:e.target.value}))}/>
             </div>
             <div className='row' style={{marginTop:10}}>
               <input placeholder='Winners' type='number' value={form.winners} onChange={e=>setForm(f=>({...f, winners:e.target.value}))}/>
               <input placeholder='Max deelnemers (optioneel)' value={form.max_participants} onChange={e=>setForm(f=>({...f, max_participants:e.target.value}))}/>
+            </div>
+            <div className='row' style={{marginTop:10, alignItems:'center'}}>
+              <input type='file' accept='image/*' onChange={async(e)=>{
+                const file = e.target.files && e.target.files[0];
+                if(!file) return;
+                try{
+                  const b64 = await fileToB64(file);
+                  setForm(f=>({...f, thumbnail_b64: b64, thumbnail_name: file.name}));
+                }catch(err){ setErr('Upload failed'); }
+              }}/>
+              <button className='btn' onClick={()=>setForm(f=>({...f, thumbnail_b64:'', thumbnail_name:''}))}>🗑️ Clear image</button>
             </div>
             <div style={{marginTop:10}}>
               <textarea placeholder='Beschrijving' rows='4' value={form.description} onChange={e=>setForm(f=>({...f, description:e.target.value}))}></textarea>
@@ -896,6 +1037,25 @@ def create_app(bot=None) -> FastAPI:
                 # Discord IDs are snowflakes (often larger than JS safe integers).
                 # Return them as strings so the dashboard doesn't lose precision.
                 items.append({"id": str(ch.id), "name": ch.name})
+        return {"items": items}
+
+    @app.get("/api/voice_channels")
+    async def api_voice_channels(req: Request):
+        """List joinable voice/stage channels for the dashboard."""
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        guild = bot.get_guild(gid) if bot else None
+        if not guild:
+            return {"items": []}
+        items = []
+        for ch in guild.channels:
+            if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+                items.append({"id": str(ch.id), "name": ch.name})
+        # Keep stable ordering
+        items.sort(key=lambda x: x.get("name") or "")
         return {"items": items}
 
     # --- Message sender (Mee6-style) ---
@@ -1017,6 +1177,23 @@ def create_app(bot=None) -> FastAPI:
         gid = getattr(bot, "guild_id", 0)
         bot.db.clear_counter_override(gid, kind)
         return {"ok": True}
+
+    @app.post("/api/counters/fetch")
+    async def api_counters_fetch(req: Request):
+        """Force-refresh counters right now (useful when overrides are changed)."""
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        cog = bot.get_cog('Counters') if bot else None
+        if not cog:
+            return _error(400, "Counters cog not loaded")
+        try:
+            await cog.dashboard_fetch(gid)
+        except Exception as e:
+            return _error(400, str(e))
+        return cog.dashboard_counters(gid)
 
     @app.get("/api/warns")
     async def api_warns(req: Request):
@@ -1241,11 +1418,45 @@ def create_app(bot=None) -> FastAPI:
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
+        # Normalize payload from the inline dashboard.
+        # - channel_id may arrive as string (Discord snowflake) -> cast safely
+        # - dashboard UI may send `end` instead of `end_in`
+        try:
+            if "channel_id" in body:
+                body["channel_id"] = int(str(body.get("channel_id") or "0"))
+        except Exception:
+            return _error(400, "Invalid channel_id")
+
+        if (not body.get("end_at")) and (not body.get("end_in")) and body.get("end"):
+            body["end_in"] = body.get("end")
+        if "end" in body:
+            body.pop("end", None)
+
+        # max_participants optional int
+        if "max_participants" in body:
+            mp = body.get("max_participants")
+            if mp in ("", None):
+                body["max_participants"] = None
+            else:
+                try:
+                    body["max_participants"] = int(mp)
+                except Exception:
+                    return _error(400, "Invalid max_participants")
+
+        if "winners" in body:
+            try:
+                body["winners"] = int(body.get("winners") or 1)
+            except Exception:
+                body["winners"] = 1
         cog = bot.get_cog('Giveaway')
         if not cog:
             return _error(400, "Giveaway cog not loaded")
-        await cog.dashboard_create(guild_id=getattr(bot, 'guild_id', 0), actor_user_id=uid, **body)
-        return {"ok": True}
+        try:
+            await cog.dashboard_create(guild_id=getattr(bot, 'guild_id', 0), actor_user_id=uid, **body)
+            return {"ok": True}
+        except Exception as e:
+            # Surface a friendly error to the dashboard (instead of generic 500)
+            return _error(400, str(e))
 
     @app.post("/api/giveaways/{giveaway_id}/cancel")
     async def api_giveaways_cancel(giveaway_id: int, req: Request):

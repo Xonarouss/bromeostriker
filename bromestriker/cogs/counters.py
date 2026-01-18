@@ -645,6 +645,19 @@ class Counters(commands.Cog):
             out.append({"kind": kind, "fetched": fetched, "manual": manual, "effective": effective})
         return {"items": out}
 
+    async def dashboard_fetch(self, guild_id: int) -> None:
+        """Force an immediate refresh for one guild (used by the dashboard)."""
+        g = self.bot.get_guild(int(guild_id))
+        if not g:
+            try:
+                g = await self.bot.fetch_guild(int(guild_id))
+            except Exception:
+                g = None
+        if not g:
+            raise ValueError('Guild not found')
+        await self._ensure_setup(g)
+        await self._refresh_guild(g)
+
     async def _maybe_rename(self, ch: Optional[discord.abc.GuildChannel], template: str, count: Optional[int], fmt=_fmt_nl) -> None:
         if ch is None:
             return

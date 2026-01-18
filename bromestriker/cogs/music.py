@@ -885,6 +885,13 @@ class Music(commands.Cog):
 
         # Accept both `url` and `query` payload keys.
         url = (payload.get("url") or payload.get("query") or "").strip()
+        # Optional voice channel id for join/move.
+        channel_id = None
+        try:
+            if payload.get("channel_id") is not None:
+                channel_id = int(str(payload.get("channel_id")))
+        except Exception:
+            channel_id = None
         g = self.bot.get_guild(guild_id)
         if not g:
             return
@@ -906,6 +913,34 @@ class Music(commands.Cog):
         if action == "skip":
             if vc and (vc.is_playing() or vc.is_paused()):
                 vc.stop()
+            return
+
+        if action == "disconnect":
+            if vc:
+                try:
+                    await vc.disconnect(force=True)
+                except Exception:
+                    pass
+            return
+
+        if action == "join":
+            if not channel_id:
+                return
+            ch = g.get_channel(channel_id)
+            if ch is None:
+                try:
+                    ch = await self.bot.fetch_channel(channel_id)
+                except Exception:
+                    ch = None
+            if not isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+                return
+            try:
+                if vc is None:
+                    await ch.connect()
+                else:
+                    await vc.move_to(ch)
+            except Exception:
+                pass
             return
 
         if action == "stop":

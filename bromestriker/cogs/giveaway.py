@@ -613,6 +613,10 @@ class Giveaway(commands.Cog):
         winners: int = 1,
         description: str | None = None,
         max_participants: int | None = None,
+        # Optional thumbnail attachment from dashboard.
+        # Provide thumbnail_b64 as a base64-encoded string (no data: prefix), plus thumbnail_name.
+        thumbnail_b64: str | None = None,
+        thumbnail_name: str | None = None,
     ) -> int:
         """Create a giveaway from the web dashboard.
 
@@ -631,6 +635,13 @@ class Giveaway(commands.Cog):
         if not isinstance(channel, discord.TextChannel):
             raise ValueError('channel must be a text channel')
 
+        tn = (thumbnail_name or None)
+        if tn:
+            # Ensure a safe filename for Discord attachment.
+            tn = re.sub(r"[^a-zA-Z0-9._-]", "_", tn)[:64]
+            if not tn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                tn = tn + ".png"
+
         tmp_state = GiveawayState(
             giveaway_id=0,
             guild_id=guild_id,
@@ -641,13 +652,24 @@ class Giveaway(commands.Cog):
             max_participants=max_participants,
             end_at=int(end_at),
             created_by=int(actor_user_id),
-            thumbnail_name=None,
+            thumbnail_name=tn,
             winners_count=int(winners or 1),
         )
 
         view = ParticipateView(self, tmp_state, ended=False)
-        # send message first
-        msg = await channel.send(embed=self._giveaway_embed(tmp_state, count=0), view=view)
+        # send message first (optionally with thumbnail attachment)
+        files = None
+        if thumbnail_b64 and tn:
+            try:
+                import base64
+                from io import BytesIO
+                raw = base64.b64decode(thumbnail_b64)
+                files = [discord.File(BytesIO(raw), filename=tn)]
+            except Exception:
+                files = None
+                tmp_state.thumbnail_name = None
+
+        msg = await channel.send(embed=self._giveaway_embed(tmp_state, count=0), view=view, files=files)
 
         giveaway_id = self.bot.db.create_giveaway(
             guild_id=guild_id,
@@ -658,7 +680,7 @@ class Giveaway(commands.Cog):
             max_participants=max_participants,
             end_at=int(end_at),
             created_by=int(actor_user_id),
-            thumbnail_name=None,
+            thumbnail_name=tmp_state.thumbnail_name,
             winners_count=int(winners or 1),
         )
 
