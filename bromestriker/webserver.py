@@ -193,11 +193,12 @@ async def refresh_tiktok_access_token_if_needed() -> Optional[str]:
 
 
 def create_app(bot=None) -> FastAPI:
-    \1
+    app = FastAPI(title="BromeoStriker Dashboard")
+
     # Root redirect -> always land on /dashboard
-    @app.get("/", include_in_schema=False)
+    @app.get('/', include_in_schema=False)
     async def root():
-        return RedirectResponse(url="/dashboard")
+        return RedirectResponse(url='/dashboard')
 
     # Serve dashboard static assets (favicons, logos, etc.)
     static_dir = os.path.join(os.path.dirname(__file__), "static")
