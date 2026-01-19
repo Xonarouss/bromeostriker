@@ -207,6 +207,10 @@ def create_app(bot=None) -> FastAPI:
             return FileResponse(p)
         return PlainTextResponse("", status_code=404)
 
+    @app.get("/")
+    async def root():
+        return RedirectResponse(url="/dashboard")
+
     @app.get("/site.webmanifest")
     async def webmanifest():
         p = os.path.join(static_dir, "site.webmanifest")
@@ -427,8 +431,6 @@ def create_app(bot=None) -> FastAPI:
     .stationL{display:flex;gap:10px;align-items:center;min-width:0}
     .stationLogo{width:34px;height:34px;border-radius:10px;object-fit:contain;background:rgba(148,163,184,.08);padding:6px}
     .stationName{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .modalOverlay{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px}
-    .modalCard{width:min(720px,100%);background:linear-gradient(180deg, rgba(15,23,42,.98), rgba(15,23,42,.9));border:1px solid rgba(148,163,184,.18);border-radius:20px;padding:16px;box-shadow:0 28px 80px rgba(0,0,0,.55)}
     .footer{margin-top:16px;padding:14px 0;color:var(--muted);font-size:13px;text-align:center}
     @media (max-width: 980px){.sidebar{display:none}.col6{grid-column:span 12}.wrap{padding:14px}}
   </style>
@@ -510,7 +512,6 @@ def create_app(bot=None) -> FastAPI:
         {k:'warns', label:'Waarschuwingen'},
         {k:'mutes', label:'Mutes'},
         {k:'bans', label:'Bans'},
-        {k:'modlog', label:'Mod Log'},
       ];
 
       return (
@@ -552,7 +553,7 @@ def create_app(bot=None) -> FastAPI:
               {tab==='warns' && <Warns setErr={setErr} />}
               {tab==='mutes' && <Mutes setErr={setErr} />}
               {tab==='bans' && <Bans setErr={setErr} />}
-              {tab==='modlog' && <ModLog setErr={setErr} />}
+              {tab==='bans' && <Bans setErr={setErr} />}
               <div className='footer'>Made with ❤️ by <a href='https://xonarous.nl' target='_blank' rel='noreferrer'>Xonarous</a></div>
             </div>
           </div>
@@ -609,8 +610,7 @@ def create_app(bot=None) -> FastAPI:
               <select value={voiceId} onChange={e=>setVoiceId(e.target.value)} style={{flex:1}}>
                 {voiceChannels.map(v=> <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
-              {/* Discord Snowflakes must stay strings (JS Number loses precision) */}
-              <button className='btn' onClick={()=>act('join', {channel_id: String(voiceId)})}>🔌 Join</button>
+              <button className='btn' onClick={()=>act('join', {channel_id: Number(voiceId)})}>🔌 Join</button>
               <button className='btn danger' onClick={()=>act('disconnect')}>🛑 Disconnect</button>
             </div>
             <div className='row' style={{marginTop:12}}>
@@ -894,6 +894,166 @@ def create_app(bot=None) -> FastAPI:
       );
     }
 
+    function Giveaways({setErr}){
+      const [list, setList] = useState([]);
+      const [channels, setChannels] = useState([]);
+      const [templates, setTemplates] = useState([]);
+      const [form, setForm] = useState({channel_id:'', prize:'', end:'30m', winners:1, max_participants:'', description:'', thumbnail_b64:null, thumbnail_name:null});
+      const [tplForm, setTplForm] = useState({name:'', prize:'1000 V-Bucks', description:'Win 1000 V-Bucks!', winners:1, max_participants:'', thumbnail_b64:null, thumbnail_name:null});
+
+      const load = async()=>{
+        setErr('');
+        try{
+          const res = await Promise.all([api('/api/giveaways'), api('/api/channels'), api('/api/giveaways/templates')]);
+          const a = res[0], b = res[1], t = res[2];
+          setList(a.items||[]);
+          setChannels(b.items||[]);
+          setTemplates(t.items||[]);
+          if(!form.channel_id && (b.items||[]).length) setForm(f=>({...f, channel_id: String(b.items[0].id)}));
+        }catch(e){ setErr(e.message); }
+      };
+      useEffect(()=>{ load(); },[]);
+
+      const onPickFile = (setter)=> (e)=>{
+        const file = (e.target.files && e.target.files[0]) ? e.target.files[0] : null;
+        if(!file){ setter(s=>({...s, thumbnail_b64:null, thumbnail_name:null})); return; }
+        const r = new FileReader();
+        r.onload = ()=>{ setter(s=>({...s, thumbnail_b64: String(r.result), thumbnail_name: file.name})); };
+        r.readAsDataURL(file);
+      };
+
+      const submit = async()=>{
+        setErr('');
+        try{
+          const payload = {...form, winners: Number(form.winners||1), channel_id: Number(form.channel_id)};
+          // map end field to end_in
+          payload.end_in = form.end;
+          delete payload.end;
+          await api('/api/giveaways/create', {method:'POST', body: JSON.stringify(payload)});
+          await load();
+        }catch(e){ setErr(e.message); }
+      };
+
+      const action = async(id, act)=>{
+        setErr('');
+        try{ await api(`/api/giveaways/${id}/${act}`, {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
+      };
+
+      const deleteGiveaway = async(id)=>{
+        setErr('');
+        try{ await api(`/api/giveaways/${id}/delete`, {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
+      };
+
+      const createTemplate = async()=>{
+        setErr('');
+        try{
+          const payload = {...tplForm, winners: Number(tplForm.winners||1)};
+          await api('/api/giveaways/templates', {method:'POST', body: JSON.stringify(payload)});
+          setTplForm({name:'', prize:'', description:'', winners:1, max_participants:'', thumbnail_b64:null, thumbnail_name:null});
+          await load();
+        }catch(e){ setErr(e.message); }
+      };
+
+      const deleteTemplate = async(id)=>{
+        setErr('');
+        try{ await api(`/api/giveaways/templates/${id}/delete`, {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
+      };
+
+      const useTemplate = async(id)=>{
+        setErr('');
+        try{
+          await api(`/api/giveaways/templates/${id}/use`, {method:'POST', body: JSON.stringify({channel_id: Number(form.channel_id), end_in: form.end})});
+          await load();
+        }catch(e){ setErr(e.message); }
+      };
+
+      return (
+        <div className='grid'>
+          <div className='card col6'>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Templates</div>
+            <div className='card' style={{padding:12, marginBottom:12}}>
+              <div style={{fontWeight:800, marginBottom:8}}>Built-in</div>
+              <div className='row' style={{justifyContent:'space-between'}}>
+                <div>
+                  <div style={{fontWeight:800}}>1000 V-Bucks</div>
+                  <div className='muted'>Met icon (vbucks-1000.jpg)</div>
+                </div>
+                <button className='btn primary' onClick={()=>useTemplate('builtin_1000')}>Gebruik</button>
+              </div>
+            </div>
+            {templates.length===0 ? <div className='muted'>Geen custom templates.</div> : templates.map(t=> (
+              <div key={t.id} className='card' style={{padding:12, margin:'10px 0'}}>
+                <div style={{fontWeight:800}}>{t.name}</div>
+                <div className='muted'>{t.prize}</div>
+                <div className='row' style={{marginTop:8}}>
+                  <button className='btn primary' onClick={()=>useTemplate(t.id)}>Gebruik</button>
+                  <button className='btn danger' onClick={()=>deleteTemplate(t.id)}>Verwijder</button>
+                </div>
+              </div>
+            ))}
+
+            <div style={{marginTop:14, fontWeight:800}}>Template aanmaken</div>
+            <div className='row' style={{marginTop:8}}>
+              <input placeholder='Template naam' value={tplForm.name} onChange={e=>setTplForm(s=>({...s,name:e.target.value}))}/>
+              <input placeholder='Prijs' value={tplForm.prize} onChange={e=>setTplForm(s=>({...s,prize:e.target.value}))}/>
+            </div>
+            <div style={{marginTop:8}}>
+              <textarea rows='3' placeholder='Beschrijving' value={tplForm.description} onChange={e=>setTplForm(s=>({...s,description:e.target.value}))}></textarea>
+            </div>
+            <div className='row' style={{marginTop:8}}>
+              <input placeholder='Winners' type='number' value={tplForm.winners} onChange={e=>setTplForm(s=>({...s,winners:e.target.value}))}/>
+              <input placeholder='Max deelnemers (optioneel)' value={tplForm.max_participants} onChange={e=>setTplForm(s=>({...s,max_participants:e.target.value}))}/>
+            </div>
+            <div className='row' style={{marginTop:8}}>
+              <input type='file' accept='image/*' onChange={onPickFile(setTplForm)} />
+              <button className='btn primary' onClick={createTemplate}>➕ Save template</button>
+            </div>
+          </div>
+
+          <div className='card col6'>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Nieuwe giveaway</div>
+            <div className='row'>
+              <select value={form.channel_id} onChange={e=>setForm(f=>({...f, channel_id:e.target.value}))}>
+                {channels.map(c=> <option key={c.id} value={c.id}>#{c.name}</option>)}
+              </select>
+            </div>
+            <div className='row' style={{marginTop:10}}>
+              <input placeholder='Prijs' value={form.prize} onChange={e=>setForm(f=>({...f, prize:e.target.value}))}/>
+              <input placeholder='Eind (30m, 2h, 1d, 19:00, 2026-01-12 19:00)' value={form.end} onChange={e=>setForm(f=>({...f, end:e.target.value}))}/>
+            </div>
+            <div className='row' style={{marginTop:10}}>
+              <input placeholder='Winners' type='number' value={form.winners} onChange={e=>setForm(f=>({...f, winners:e.target.value}))}/>
+              <input placeholder='Max deelnemers (optioneel)' value={form.max_participants} onChange={e=>setForm(f=>({...f, max_participants:e.target.value}))}/>
+            </div>
+            <div style={{marginTop:10}}>
+              <textarea placeholder='Beschrijving' rows='4' value={form.description} onChange={e=>setForm(f=>({...f, description:e.target.value}))}></textarea>
+            </div>
+            <div className='row' style={{marginTop:10}}>
+              <input type='file' accept='image/*' onChange={onPickFile(setForm)} />
+              <button className='btn primary' onClick={submit}>✅ Maak</button>
+            </div>
+            <div className='muted' style={{marginTop:8}}>Tip: upload een icon om als thumbnail in de giveaway-embed te gebruiken.</div>
+          </div>
+
+          <div className='card col12'>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Actieve/Recente giveaways</div>
+            {list.length===0 && <div className='muted'>Geen giveaways.</div>}
+            {list.map(g=> (
+              <div key={g.id} className='card' style={{padding:12, margin:'10px 0'}}>
+                <div style={{fontWeight:800}}>{g.prize} {g.ended? '(ended)':''}</div>
+                <div className='muted'>ID: {g.id} • entries: {g.entries} • end: {g.end_at_human}</div>
+                <div className='row' style={{marginTop:8}}>
+                  <button className='btn' onClick={()=>action(g.id,'reroll')}>🎲 Reroll</button>
+                  <button className='btn danger' onClick={()=>action(g.id,'cancel')}>🛑 Cancel</button>
+                  <button className='btn danger' onClick={()=>deleteGiveaway(g.id)}>🗑️ Verwijder</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     function Strikes({setErr}){
       const [q, setQ] = useState('');
       const [items, setItems] = useState([]);
@@ -936,81 +1096,39 @@ def create_app(bot=None) -> FastAPI:
 
     function Counters({setErr}){
       const [items, setItems] = useState([]);
-      const [manualDraft, setManualDraft] = useState({});
-
       const load = async()=>{
         setErr('');
-        try{
-          const r = await api('/api/counters');
-          const its = r.items||[];
-          setItems(its);
-          // init drafts for inputs
-          const d = {};
-          its.forEach(it=>{ d[it.kind] = (it.manual===null||it.manual===undefined) ? '' : String(it.manual); });
-          setManualDraft(d);
-        }catch(e){ setErr(e.message); }
+        try{ const r = await api('/api/counters'); setItems(r.items||[]); }catch(e){ setErr(e.message); }
       };
-
       useEffect(()=>{ load(); },[]);
-
-      const saveOne = async(kind)=>{
+      const save = async(kind, val)=>{
         setErr('');
-        try{
-          const v = (manualDraft[kind]||'').trim();
-          if(v==='') return;
-          await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: Number(v)})});
-          await load();
-        }catch(e){ setErr(e.message); }
+        try{ await api('/api/counters/override', {method:'POST', body: JSON.stringify({kind, value: Number(val)})}); await load(); }catch(e){ setErr(e.message); }
       };
-
       const clear = async(kind)=>{
         setErr('');
         try{ await api('/api/counters/clear', {method:'POST', body: JSON.stringify({kind})}); await load(); }catch(e){ setErr(e.message); }
       };
-
-      const fetchNow = async()=>{
-        setErr('');
-        try{ await api('/api/counters/fetch', {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
-      };
-
-      const resetAll = async()=>{
-        setErr('');
-        try{ await api('/api/counters/reset', {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
-      };
-
-      const showVal = (v)=> (v===null || v===undefined) ? '—' : v;
-
       return (
         <div className='card'>
-          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Counters</div>
+          <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Counters overrides</div>
           <div className='muted' style={{marginBottom:10}}>
             Handmatige value wint altijd, behalve als de automatisch gefetchte value hoger is.
           </div>
-
           {items.map(it=> (
             <div key={it.kind} className='row' style={{justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
               <div>
                 <div style={{fontWeight:800}}>{it.kind}</div>
-                <div className='muted'>fetched: {showVal(it.fetched)} • manual: {showVal(it.manual)} • effective: {showVal(it.effective)}</div>
+                <div className='muted'>fetched: {(it.fetched === null || it.fetched === undefined) ? '—' : it.fetched} • manual: {(it.manual === null || it.manual === undefined) ? '—' : it.manual} • effective: {(it.effective === null || it.effective === undefined) ? '—' : it.effective}</div>
               </div>
               <div className='row'>
-                <input
-                  type='number'
-                  style={{width:140}}
-                  value={manualDraft[it.kind]===undefined ? '' : manualDraft[it.kind]}
-                  placeholder='manual'
-                  onChange={e=>setManualDraft(s=>({...s,[it.kind]:e.target.value}))}
-                />
-                <button className='btn primary' onClick={()=>saveOne(it.kind)}>Save</button>
+                <input type='number' style={{width:120}} defaultValue={(it.manual === null || it.manual === undefined) ? '' : it.manual} placeholder='manual' onBlur={e=>{ const v=e.target.value; if(v==='') return; save(it.kind, v); }} />
                 <button className='btn' onClick={()=>clear(it.kind)}>Clear</button>
               </div>
             </div>
           ))}
-
           <div className='row' style={{marginTop:12}}>
             <button className='btn' onClick={load}>↻ Refresh</button>
-            <button className='btn primary' onClick={fetchNow}>⬇️ Fetch</button>
-            <button className='btn danger' onClick={resetAll}>🧹 Reset overrides</button>
           </div>
         </div>
       );
@@ -1020,15 +1138,6 @@ def create_app(bot=None) -> FastAPI:
       const [list, setList] = useState([]);
       const [channels, setChannels] = useState([]);
       const [templates, setTemplates] = useState([]);
-
-      // Template-use dialog (so templates don't auto-post immediately)
-      const [useDlgOpen, setUseDlgOpen] = useState(false);
-      const [useDlgTpl, setUseDlgTpl] = useState(null);
-      const [useDlgEndMin, setUseDlgEndMin] = useState(30);
-      const [useDlgWinners, setUseDlgWinners] = useState(1);
-      const [useDlgMax, setUseDlgMax] = useState('');
-
-      // 'end' is reused for template apply + manual create.
       const [form, setForm] = useState({channel_id:'', prize:'', end:'30m', winners:1, max_participants:'', description:'', thumbnail_b64:null, thumbnail_name:null});
       const [tpl, setTpl] = useState({name:'', prize:'', description:'', winners:1, max_participants:'', thumbnail_b64:null, thumbnail_name:null});
 
@@ -1037,16 +1146,14 @@ def create_app(bot=None) -> FastAPI:
         try{
           const res = await Promise.all([api('/api/giveaways'), api('/api/channels'), api('/api/giveaways/templates')]);
           const a = res[0]; const b = res[1]; const t = res[2];
-          setList(a.items||[]);
-          setChannels(b.items||[]);
-          setTemplates(t.items||[]);
+          setList(a.items||[]); setChannels(b.items||[]); setTemplates(t.items||[]);
           if(!form.channel_id && (b.items||[]).length) setForm(f=>({...f, channel_id: String(b.items[0].id)}));
         }catch(e){ setErr(e.message); }
       };
       useEffect(()=>{ load(); },[]);
 
       const pickFile = (file, setter)=>{
-        if(!file){ setter(f=>({...f, thumbnail_b64:null, thumbnail_name:null})); return; }
+        if(!file) return;
         const r = new FileReader();
         r.onload = ()=>{ setter(f=>({...f, thumbnail_b64: String(r.result), thumbnail_name: file.name})); };
         r.readAsDataURL(file);
@@ -1056,12 +1163,11 @@ def create_app(bot=None) -> FastAPI:
         setErr('');
         try{
           const payload = {
-            // Discord Snowflakes must stay strings (JS Number loses precision)
-            channel_id: String(form.channel_id),
+            channel_id: Number(form.channel_id),
             prize: form.prize,
             description: form.description,
             winners: Number(form.winners||1),
-            max_participants: (form.max_participants===''? null : form.max_participants),
+            max_participants: form.max_participants,
             end_in: form.end,
             thumbnail_b64: form.thumbnail_b64,
             thumbnail_name: form.thumbnail_name
@@ -1103,107 +1209,36 @@ def create_app(bot=None) -> FastAPI:
         try{ await api(`/api/giveaways/templates/${id}/delete`, {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
       };
 
-      const openUseTemplate = (t)=>{
-        setErr('');
-        setUseDlgTpl(t);
-        // defaults: duration from right-side form, winners/max from template
-        let mins = 30;
-        try{
-          const m = String(form.end||'30m').trim().match(/^(\d+)\s*m$/i);
-          if(m) mins = parseInt(m[1],10);
-        }catch(e){ mins = 30; }
-        setUseDlgEndMin(mins);
-        setUseDlgWinners(Number((t && t.winners) ? t.winners : 1));
-        setUseDlgMax((t && t.max_participants) ? String(t.max_participants) : '');
-        setUseDlgOpen(true);
-      };
-
-      const confirmUseTemplate = async()=>{
-        if(!useDlgTpl) return;
+      const useTemplate = async(id)=>{
         setErr('');
         try{
-          const mins = Math.max(1, parseInt(String(useDlgEndMin||0),10) || 1);
-          const winners = Math.max(1, parseInt(String(useDlgWinners||1),10) || 1);
-          const maxp = (String(useDlgMax||'').trim()==='' ? null : parseInt(String(useDlgMax),10));
-          await api(`/api/giveaways/templates/${useDlgTpl.id}/use`, {method:'POST', body: JSON.stringify({
-            // Discord Snowflakes must stay strings (JS Number loses precision)
-            channel_id: String(form.channel_id),
-            end_in: String(mins)+'m',
-            winners: winners,
-            max_participants: maxp
+          await api(`/api/giveaways/templates/${id}/use`, {method:'POST', body: JSON.stringify({
+            channel_id: Number(form.channel_id),
+            end_in: form.end
           })});
-          setUseDlgOpen(false);
-          setUseDlgTpl(null);
           await load();
         }catch(e){ setErr(e.message); }
       };
 
-      const renderTemplateCard = (t)=>{
-        const isBuiltin = String(t.id).indexOf('builtin_')===0;
-        return (
-          <div key={t.id} className='card' style={{padding:12, margin:'10px 0'}}>
-            <div className='row' style={{justifyContent:'space-between', alignItems:'flex-start'}}>
-              <div>
-                <div style={{fontWeight:800}}>{t.name}</div>
-                <div className='muted'>{t.prize}</div>
-                <div className='muted' style={{marginTop:4}}>winners: {t.winners} {t.max_participants ? `• max: ${t.max_participants}` : ''}</div>
-                {t.thumbnail_name ? <div className='muted' style={{marginTop:4}}>icon: {t.thumbnail_name}</div> : null}
-              </div>
-              <div className='row'>
-                <button className='btn primary' onClick={()=>openUseTemplate(t)}>Gebruik</button>
-                {isBuiltin ? null : <button className='btn danger' onClick={()=>deleteTemplate(t.id)}>🗑️</button>}
-              </div>
-            </div>
-          </div>
-        );
-      };
-
       return (
         <div className='grid'>
-          {useDlgOpen && (
-            <div className='modalOverlay' onClick={()=>{ setUseDlgOpen(false); setUseDlgTpl(null); }}>
-              <div className='modalCard' onClick={e=>e.stopPropagation()}>
-                <div className='row' style={{justifyContent:'space-between', alignItems:'center'}}>
-                  <div style={{fontWeight:900,fontSize:18}}>Template gebruiken</div>
-                  <button className='btn' onClick={()=>{ setUseDlgOpen(false); setUseDlgTpl(null); }}>✖</button>
-                </div>
-                <div className='muted' style={{marginTop:6}}>
-                  {useDlgTpl ? (useDlgTpl.name + ' • ' + useDlgTpl.prize) : ''}
-                </div>
-
-                <div className='row' style={{marginTop:14}}>
-                  <div style={{flex:1}}>
-                    <div className='muted' style={{marginBottom:6}}>Duur (minuten)</div>
-                    <input type='number' min='1' value={useDlgEndMin} onChange={e=>setUseDlgEndMin(e.target.value)} />
-                    <div className='row' style={{marginTop:8, flexWrap:'wrap'}}>
-                      <button className='btn' onClick={()=>setUseDlgEndMin(15)}>15m</button>
-                      <button className='btn' onClick={()=>setUseDlgEndMin(30)}>30m</button>
-                      <button className='btn' onClick={()=>setUseDlgEndMin(60)}>60m</button>
-                      <button className='btn' onClick={()=>setUseDlgEndMin(120)}>120m</button>
-                    </div>
-                  </div>
-                  <div style={{flex:1}}>
-                    <div className='muted' style={{marginBottom:6}}>Max winnaars</div>
-                    <input type='number' min='1' value={useDlgWinners} onChange={e=>setUseDlgWinners(e.target.value)} />
-                    <div className='muted' style={{marginTop:12, marginBottom:6}}>Max deelnemers (optioneel)</div>
-                    <input type='number' min='1' value={useDlgMax} onChange={e=>setUseDlgMax(e.target.value)} placeholder='—' />
-                  </div>
-                </div>
-
-                <div className='row' style={{justifyContent:'flex-end', marginTop:16}}>
-                  <button className='btn' onClick={()=>{ setUseDlgOpen(false); setUseDlgTpl(null); }}>Annuleren</button>
-                  <button className='btn primary' onClick={confirmUseTemplate}>Start giveaway</button>
-                </div>
-              </div>
-            </div>
-          )}
           <div className='card col6'>
             <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Templates</div>
-            <div className='muted' style={{marginBottom:10}}>Gebruik de velden rechts (kanaal/duur/winners/max) om de template-use te overriden.</div>
+            {templates.length===0 && <div className='muted'>Geen templates.</div>}
+            {templates.map(t=> (
+              <div key={t.id} className='row' style={{justifyContent:'space-between', padding:'8px 0', borderBottom:'1px solid #1f2937'}}>
+                <div>
+                  <div style={{fontWeight:800}}>{t.name}</div>
+                  <div className='muted'>{t.prize}</div>
+                </div>
+                <div className='row'>
+                  <button className='btn primary' onClick={()=>useTemplate(t.id)}>Gebruik</button>
+                  {String(t.id).indexOf('builtin_')===0 ? null : <button className='btn danger' onClick={()=>deleteTemplate(t.id)}>🗑️</button>}
+                </div>
+              </div>
+            ))}
 
-            {templates.length===0 ? <div className='muted'>Geen templates.</div> : templates.map(renderTemplateCard)}
-
-            <div style={{marginTop:16, fontWeight:800}}>Nieuwe template</div>
+            <div style={{marginTop:12,fontWeight:800}}>Nieuwe template</div>
             <div className='row' style={{marginTop:8}}>
               <input placeholder='Naam' value={tpl.name} onChange={e=>setTpl(s=>({...s,name:e.target.value}))}/>
               <input placeholder='Prijs' value={tpl.prize} onChange={e=>setTpl(s=>({...s,prize:e.target.value}))}/>
@@ -1225,29 +1260,29 @@ def create_app(bot=None) -> FastAPI:
           </div>
 
           <div className='card col6'>
-            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Nieuwe giveaway / template instellingen</div>
+            <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Nieuwe giveaway</div>
             <div className='row'>
               <select value={form.channel_id} onChange={e=>setForm(f=>({...f, channel_id:e.target.value}))}>
                 {channels.map(c=> <option key={c.id} value={c.id}>#{c.name}</option>)}
               </select>
             </div>
             <div className='row' style={{marginTop:10}}>
-              <input placeholder='Prijs (voor handmatige giveaway)' value={form.prize} onChange={e=>setForm(f=>({...f, prize:e.target.value}))}/>
-              <input placeholder='Duur/Eind (30m, 2h, 1d, 19:00, 2026-01-12 19:00)' value={form.end} onChange={e=>setForm(f=>({...f, end:e.target.value}))}/>
+              <input placeholder='Prijs' value={form.prize} onChange={e=>setForm(f=>({...f, prize:e.target.value}))}/>
+              <input placeholder='Eind (30m, 2h, 1d, 19:00, 2026-01-12 19:00)' value={form.end} onChange={e=>setForm(f=>({...f, end:e.target.value}))}/>
             </div>
             <div className='row' style={{marginTop:10}}>
               <input placeholder='Winners' type='number' value={form.winners} onChange={e=>setForm(f=>({...f, winners:e.target.value}))}/>
               <input placeholder='Max deelnemers (optioneel)' value={form.max_participants} onChange={e=>setForm(f=>({...f, max_participants:e.target.value}))}/>
             </div>
             <div style={{marginTop:10}}>
-              <textarea placeholder='Beschrijving (voor handmatige giveaway)' rows='4' value={form.description} onChange={e=>setForm(f=>({...f, description:e.target.value}))}></textarea>
+              <textarea placeholder='Beschrijving' rows='4' value={form.description} onChange={e=>setForm(f=>({...f, description:e.target.value}))}></textarea>
             </div>
             <div className='row' style={{marginTop:8, alignItems:'center'}}>
               <input type='file' accept='image/*' onChange={e=>pickFile((e.target.files||[])[0], setForm)} />
               <div className='muted'>{form.thumbnail_name ? form.thumbnail_name : 'Geen icon'}</div>
             </div>
             <div className='row' style={{marginTop:10}}>
-              <button className='btn primary' onClick={submit}>✅ Maak handmatig</button>
+              <button className='btn primary' onClick={submit}>✅ Maak</button>
             </div>
 
             <div style={{marginTop:16, fontWeight:800}}>Actieve/Recente giveaways</div>
@@ -1336,50 +1371,6 @@ def create_app(bot=None) -> FastAPI:
       );
     }
 
-    function ModLog({setErr}){
-      const [items, setItems] = useState([]);
-      const load = async()=>{ setErr(''); try{ setItems((await api('/api/modlog')).items||[]); }catch(e){ setErr(e.message); } };
-      useEffect(()=>{ load(); },[]);
-
-      const clear = async()=>{
-        if(!confirm('Mod log legen?')) return;
-        setErr('');
-        try{ await api('/api/modlog/clear', {method:'POST'}); await load(); }
-        catch(e){ setErr(e.message); }
-      };
-
-      return (
-        <div className='card'>
-          <div className='row' style={{justifyContent:'space-between', alignItems:'center'}}>
-            <div style={{fontSize:18,fontWeight:800}}>Mod Log</div>
-            <div className='row'>
-              <button className='btn' onClick={load}>↻ Refresh</button>
-              <button className='btn danger' onClick={clear}>🧹 Clear</button>
-            </div>
-          </div>
-          {items.length===0 && <div className='muted' style={{marginTop:10}}>Geen entries.</div>}
-          <div style={{marginTop:10}}>
-            {items.map(it=> (
-              <div key={it.id} style={{padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
-                <div className='row' style={{justifyContent:'space-between'}}>
-                  <div style={{fontWeight:800}}>{it.action}</div>
-                  <div className='muted'>{it.created_at_human}</div>
-                </div>
-                <div className='muted' style={{marginTop:4}}>
-                  <span>actor: {it.actor || '—'}</span>
-                  {' • '}
-                  <span>target: {it.target || '—'}</span>
-                  {it.channel_id ? (<span>{' • '}channel: {it.channel_id}</span>) : null}
-                  {it.message_id ? (<span>{' • '}message: {it.message_id}</span>) : null}
-                </div>
-                {it.reason ? <div style={{marginTop:4}}>{it.reason}</div> : null}
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
     ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
   </script>
 </body>
@@ -1420,23 +1411,9 @@ def create_app(bot=None) -> FastAPI:
             return _error(401, str(e))
         guild = bot.get_guild(getattr(bot, "guild_id", 0))
         items = []
-        if guild and bot and bot.user:
-            # Ensure we have the bot member so we can check permissions
-            me = guild.me
-            if me is None:
-                try:
-                    me = guild.get_member(bot.user.id) or await guild.fetch_member(bot.user.id)
-                except Exception:
-                    me = None
-            for ch in getattr(guild, 'text_channels', []):
-                try:
-                    if me is not None:
-                        perms = ch.permissions_for(me)
-                        if not (getattr(perms, 'view_channel', False) and getattr(perms, 'send_messages', False)):
-                            continue
-                    items.append({"id": str(ch.id), "name": ch.name})
-                except Exception:
-                    continue
+        if guild:
+            for ch in guild.text_channels:
+                items.append({"id": ch.id, "name": ch.name})
         return {"items": items}
 
     @app.get("/api/voice_channels")
@@ -1449,7 +1426,7 @@ def create_app(bot=None) -> FastAPI:
         items = []
         if guild:
             for ch in guild.voice_channels:
-                items.append({"id": str(ch.id), "name": ch.name})
+                items.append({"id": ch.id, "name": ch.name})
         return {"items": items}
 
     @app.get("/api/bans")
@@ -1465,155 +1442,92 @@ def create_app(bot=None) -> FastAPI:
         try:
             async for entry in guild.bans(limit=200):
                 u = entry.user
-                out.append({"user_id": str(u.id), "name": str(u), "reason": entry.reason})
+                out.append({"user_id": u.id, "name": str(u), "reason": entry.reason})
         except Exception:
             out = []
         return {"items": out}
-
-    # --- moderation log ---
-    @app.get("/api/modlog")
-    async def api_modlog(req: Request):
-        try:
-            await _require_allowed(req)
-        except PermissionError as e:
-            return _error(401, str(e))
-        gid = getattr(bot, "guild_id", 0)
-        rows = bot.db.list_modlog(gid, limit=200)
-        guild = bot.get_guild(gid)
-        items = []
-        for r in rows:
-            actor = None
-            target = None
-            try:
-                if guild and r["actor_id"]:
-                    m = guild.get_member(int(r["actor_id"]))
-                    actor = str(m) if m else str(r["actor_id"])
-                elif r["actor_id"]:
-                    actor = str(r["actor_id"])
-            except Exception:
-                actor = str(r["actor_id"]) if r["actor_id"] else None
-            try:
-                if guild and r["target_id"]:
-                    m = guild.get_member(int(r["target_id"]))
-                    target = str(m) if m else str(r["target_id"])
-                elif r["target_id"]:
-                    target = str(r["target_id"])
-            except Exception:
-                target = str(r["target_id"]) if r["target_id"] else None
-            ts = int(r["created_at"])
-            items.append(
-                {
-                    "id": int(r["id"]),
-                    "action": r["action"],
-                    "actor_id": str(r["actor_id"]) if r["actor_id"] is not None else None,
-                    "target_id": str(r["target_id"]) if r["target_id"] is not None else None,
-                    "actor": actor,
-                    "target": target,
-                    "channel_id": str(r["channel_id"]) if r["channel_id"] is not None else None,
-                    "message_id": str(r["message_id"]) if r["message_id"] is not None else None,
-                    "reason": r["reason"],
-                    "extra_json": r["extra_json"],
-                    "created_at": ts,
-                    "created_at_human": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts)),
-                }
-            )
-        return {"items": items}
-
-    @app.post("/api/modlog/clear")
-    async def api_modlog_clear(req: Request):
-        try:
-            await _require_allowed(req)
-        except PermissionError as e:
-            return _error(401, str(e))
-        gid = getattr(bot, "guild_id", 0)
-        bot.db.clear_modlog(gid)
-        return {"ok": True}
 
     # --- Message sender (Mee6-style) ---
     @app.post("/api/messages/send")
     async def api_messages_send(req: Request):
         try:
-            uid = await _require_allowed(req)
+            actor_user_id = await _require_allowed(req)
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
         channel_id = int(body.get("channel_id") or 0)
-        content = str(body.get("content") or "")
-        embed = body.get("embed")
+        content = (body.get("content") or "").rstrip()
+        embed_in = body.get("embed") or None
         if not channel_id:
             return _error(400, "channel_id missing")
+        if not bot:
+            return _error(400, "Bot not ready")
 
-        guild = bot.get_guild(getattr(bot, "guild_id", 0))
         ch = bot.get_channel(channel_id)
-        if ch is None and guild is not None:
-            try:
-                ch = guild.get_channel(channel_id)
-            except Exception:
-                ch = None
         if ch is None:
             try:
                 ch = await bot.fetch_channel(channel_id)
             except Exception:
                 ch = None
-        if ch is None:
-            return _error(400, "Channel not found")
+        if ch is None or not hasattr(ch, "send"):
+            return _error(400, "Channel not found or not sendable")
 
-        # Permission check (avoid confusing 400s)
+        discord_embed = None
         try:
-            if guild and bot and bot.user:
-                me = guild.me
-                if me is None:
-                    me = guild.get_member(bot.user.id)
-                if me is not None and hasattr(ch, 'permissions_for'):
-                    perms = ch.permissions_for(me)
-                    if not (getattr(perms, 'view_channel', False) and getattr(perms, 'send_messages', False)):
-                        return _error(400, "Bot heeft geen rechten om in dit kanaal te sturen")
+            import discord
+            if isinstance(embed_in, dict):
+                title = (embed_in.get("title") or "").strip() or None
+                description = (embed_in.get("description") or "").strip() or None
+                url = (embed_in.get("url") or "").strip() or None
+                color_hex = (embed_in.get("color") or "").strip().lstrip("#")
+                color = None
+                if color_hex:
+                    try:
+                        color = int(color_hex, 16)
+                    except Exception:
+                        color = None
+                discord_embed = discord.Embed(title=title, description=description, url=url, color=color)
+                thumb = (embed_in.get("thumbnail_url") or "").strip()
+                if thumb:
+                    discord_embed.set_thumbnail(url=thumb)
+                img = (embed_in.get("image_url") or "").strip()
+                if img:
+                    discord_embed.set_image(url=img)
+                footer = (embed_in.get("footer") or "").strip()
+                if footer:
+                    discord_embed.set_footer(text=footer)
+                # If embed has no meaningful content, drop it.
+                if not any([title, description, url, thumb, img, footer]):
+                    discord_embed = None
         except Exception:
-            pass
+            discord_embed = None
 
-        # Build embed if provided
-        eobj = None
-        if embed and isinstance(embed, dict):
-            try:
-                import discord
-                color_hex = str(embed.get("color") or "").replace('#','').strip()
-                color = int(color_hex, 16) if color_hex else 0x16A34A
-                eobj = discord.Embed(
-                    title=(embed.get("title") or None),
-                    description=(embed.get("description") or None),
-                    url=(embed.get("url") or None),
-                    color=color,
-                )
-                if embed.get("thumbnail_url"):
-                    eobj.set_thumbnail(url=str(embed.get("thumbnail_url")))
-                if embed.get("image_url"):
-                    eobj.set_image(url=str(embed.get("image_url")))
-                if embed.get("footer"):
-                    eobj.set_footer(text=str(embed.get("footer")))
-            except Exception:
-                eobj = None
+        if not content and discord_embed is None:
+            return _error(400, "Empty message")
 
-        # Send
         try:
-            msg = await ch.send(content=content or None, embed=eobj)
+            msg = await ch.send(content=content or None, embed=discord_embed)
         except Exception as e:
-            return _error(500, f"send_failed: {e}")
+            return _error(500, f"send_failed:{e}")
 
-        # Save history
-        gid = getattr(bot, "guild_id", 0)
+        # store history for dashboard editing
         try:
+            embed_json = None
+            if embed_in and discord_embed is not None:
+                import json as _json
+                embed_json = _json.dumps(embed_in)
             bot.db.add_sent_message(
-                guild_id=int(gid),
+                guild_id=getattr(bot, "guild_id", 0),
                 channel_id=int(channel_id),
-                message_id=int(msg.id),
-                content=content,
-                embed_json=(json.dumps(embed) if embed else None),
-                created_by=int(uid),
+                message_id=int(getattr(msg, "id", 0) or 0),
+                content=content or None,
+                embed_json=embed_json,
+                created_by=int(actor_user_id),
             )
         except Exception:
-            # History is non-critical; never fail the send because of DB issues.
             pass
-        return {"ok": True, "message_id": str(msg.id)}
+
+        return {"ok": True, "message_id": int(getattr(msg, "id", 0) or 0)}
 
     @app.get("/api/messages/sent")
     async def api_messages_sent(req: Request):
@@ -1628,8 +1542,8 @@ def create_app(bot=None) -> FastAPI:
             items.append(
                 {
                     "id": int(r["id"]),
-                    "channel_id": str(r["channel_id"]),
-                    "message_id": str(r["message_id"]),
+                    "channel_id": int(r["channel_id"]),
+                    "message_id": int(r["message_id"]),
                     "content": r["content"],
                     "embed_json": r["embed_json"],
                     "created_at": int(r["created_at"]),
@@ -1799,39 +1713,6 @@ def create_app(bot=None) -> FastAPI:
         bot.db.clear_counter_override(gid, kind)
         return {"ok": True}
 
-
-    @app.post("/api/counters/fetch")
-    async def api_counters_fetch(req: Request):
-        try:
-            await _require_allowed(req)
-        except PermissionError as e:
-            return _error(401, str(e))
-        gid = getattr(bot, "guild_id", 0)
-        cog = bot.get_cog('Counters') if bot else None
-        guild = bot.get_guild(gid) if bot else None
-        if not cog or not guild:
-            return _error(400, "Counters cog or guild not available")
-        try:
-            await cog._ensure_setup(guild)  # type: ignore[attr-defined]
-            await cog._refresh_guild(guild)  # type: ignore[attr-defined]
-        except Exception as e:
-            return _error(500, f"fetch_failed: {e}")
-        return cog.dashboard_counters(gid)
-
-    @app.post("/api/counters/reset")
-    async def api_counters_reset(req: Request):
-        try:
-            await _require_allowed(req)
-        except PermissionError as e:
-            return _error(401, str(e))
-        gid = getattr(bot, "guild_id", 0)
-        for kind in ["members","twitch","instagram","tiktok"]:
-            try:
-                bot.db.clear_counter_override(gid, kind)
-            except Exception:
-                pass
-        return {"ok": True}
-
     @app.get("/api/warns")
     async def api_warns(req: Request):
         try:
@@ -1897,13 +1778,13 @@ def create_app(bot=None) -> FastAPI:
             for m in results:
                 row = cur.execute("SELECT strikes FROM strikes WHERE guild_id=? AND user_id=?", (gid, int(m.id))).fetchone()
                 strikes = int(row[0]) if row else 0
-                items.append({"user_id": str(m.id), "user_tag": str(m), "strikes": strikes})
+                items.append({"user_id": int(m.id), "user_tag": str(m), "strikes": strikes})
         return {"items": items}
 
     @app.post("/api/strikes/set")
     async def api_strikes_set(req: Request):
         try:
-            actor_id = await _require_allowed(req)
+            await _require_allowed(req)
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
@@ -1911,26 +1792,18 @@ def create_app(bot=None) -> FastAPI:
         strikes = max(0, int(body.get("strikes") or 0))
         gid = getattr(bot, "guild_id", 0)
         bot.db.set_strikes(gid, uid, strikes)
-        try:
-            bot.db.add_modlog(guild_id=gid, action="strikes_set", actor_id=int(actor_id), target_id=int(uid), reason=f"set to {strikes}")
-        except Exception:
-            pass
         return {"ok": True}
 
     @app.post("/api/warns/clear")
     async def api_warns_clear(req: Request):
         try:
-            actor_id = await _require_allowed(req)
+            await _require_allowed(req)
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
         uid = int(body.get("user_id"))
         gid = getattr(bot, "guild_id", 0)
         bot.db.delete_warns(gid, uid)
-        try:
-            bot.db.add_modlog(guild_id=gid, action="warns_clear", actor_id=int(actor_id), target_id=int(uid))
-        except Exception:
-            pass
         return {"ok": True}
 
     @app.get("/api/mutes")
@@ -1957,7 +1830,7 @@ def create_app(bot=None) -> FastAPI:
     @app.post("/api/mutes/unmute")
     async def api_unmute(req: Request):
         try:
-            actor_id = await _require_allowed(req)
+            await _require_allowed(req)
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
@@ -1982,11 +1855,6 @@ def create_app(bot=None) -> FastAPI:
             pass
         try:
             bot.db.clear_mute(gid, uid)
-        except Exception:
-            pass
-        # Mod log
-        try:
-            bot.db.add_modlog(guild_id=gid, action="unmute", actor_id=int(actor_id), target_id=int(uid))
         except Exception:
             pass
         return {"ok": True}
@@ -2232,7 +2100,7 @@ def create_app(bot=None) -> FastAPI:
                 }
             )
         # Built-in default template (1000 vbucks)
-        if not any(str(t.get("id")) == "builtin_1000" for t in items):
+        if not any(t.get("name") == "1000 vbucks" for t in items):
             items.append(
                 {
                     "id": "builtin_1000",
@@ -2336,20 +2204,12 @@ def create_app(bot=None) -> FastAPI:
                 thumb_b64 = f"data:{mime};base64,{_b64.b64encode(blob).decode('utf-8')}"
             except Exception:
                 thumb_b64 = None
-        # Allow the dashboard to override duration / max winners / max participants at use-time.
-        winners_override = body.get("winners")
-        max_participants_override = body.get("max_participants")
-        try:
-            winners_override = int(winners_override) if winners_override is not None else None
-        except Exception:
-            winners_override = None
-
         payload = {
             "channel_id": channel_id,
             "prize": tpl.get("prize"),
             "description": tpl.get("description"),
-            "winners": winners_override if winners_override is not None else int(tpl.get("winners") or 1),
-            "max_participants": max_participants_override if max_participants_override is not None else tpl.get("max_participants"),
+            "winners": int(tpl.get("winners") or 1),
+            "max_participants": tpl.get("max_participants"),
             "thumbnail_b64": thumb_b64,
             "thumbnail_name": thumb_name,
         }
@@ -2358,10 +2218,7 @@ def create_app(bot=None) -> FastAPI:
             payload["end_at"] = int(body.get("end_at"))
         if body.get("end_in") is not None:
             payload["end_in"] = str(body.get("end_in"))
-        try:
-            await cog.dashboard_create(guild_id=getattr(bot, "guild_id", 0), actor_user_id=uid, **payload)
-        except Exception as e:
-            return _error(500, str(e))
+        await cog.dashboard_create(guild_id=getattr(bot, "guild_id", 0), actor_user_id=uid, **payload)
         return {"ok": True}
 
     @app.get("/health")

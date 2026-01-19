@@ -154,24 +154,6 @@ class DB:
         """
         )
 
-        # --- moderation log (dashboard) ---
-        cur.execute(
-            """
-        CREATE TABLE IF NOT EXISTS modlog (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id INTEGER NOT NULL,
-            action TEXT NOT NULL,
-            actor_id INTEGER,
-            target_id INTEGER,
-            channel_id INTEGER,
-            message_id INTEGER,
-            reason TEXT,
-            extra_json TEXT,
-            created_at INTEGER NOT NULL
-        );
-        """
-        )
-
 
         # --- music playlists ---
         cur.execute("""
@@ -557,53 +539,6 @@ class DB:
     def delete_sent_message(self, guild_id: int, sent_id: int) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM sent_messages WHERE guild_id=? AND id=?", (int(guild_id), int(sent_id)))
-        self.conn.commit()
-
-    # --- moderation log ---
-    def add_modlog(
-        self,
-        *,
-        guild_id: int,
-        action: str,
-        actor_id: int | None = None,
-        target_id: int | None = None,
-        channel_id: int | None = None,
-        message_id: int | None = None,
-        reason: str | None = None,
-        extra: dict | None = None,
-    ) -> int:
-        now = int(time.time())
-        cur = self.conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO modlog (guild_id, action, actor_id, target_id, channel_id, message_id, reason, extra_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                int(guild_id),
-                str(action),
-                int(actor_id) if actor_id is not None else None,
-                int(target_id) if target_id is not None else None,
-                int(channel_id) if channel_id is not None else None,
-                int(message_id) if message_id is not None else None,
-                reason,
-                json.dumps(extra) if extra else None,
-                now,
-            ),
-        )
-        self.conn.commit()
-        return int(cur.lastrowid)
-
-    def list_modlog(self, guild_id: int, limit: int = 200) -> list[sqlite3.Row]:
-        cur = self.conn.cursor()
-        return cur.execute(
-            "SELECT id, action, actor_id, target_id, channel_id, message_id, reason, extra_json, created_at FROM modlog WHERE guild_id=? ORDER BY id DESC LIMIT ?",
-            (int(guild_id), int(limit)),
-        ).fetchall()
-
-    def clear_modlog(self, guild_id: int) -> None:
-        cur = self.conn.cursor()
-        cur.execute("DELETE FROM modlog WHERE guild_id=?", (int(guild_id),))
         self.conn.commit()
 
     # --- playlists ---
