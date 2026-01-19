@@ -458,6 +458,15 @@ def create_app(bot=None) -> FastAPI:
 
       useEffect(()=>{ loadMe(); },[]);
 
+
+      useEffect(()=>{
+        const fmt = new Intl.DateTimeFormat('nl-NL', { timeZone:'Europe/Amsterdam', hour:'2-digit', minute:'2-digit', second:'2-digit', day:'2-digit', month:'2-digit', year:'numeric' });
+        const tick = ()=>setNowNl(fmt.format(new Date()));
+        tick();
+        const t = setInterval(tick, 1000);
+        return ()=>clearInterval(t);
+      },[]);
+
       if(!me){
         return (
           <div className='wrap'>
@@ -488,21 +497,13 @@ def create_app(bot=None) -> FastAPI:
         );
       }
 
-      useEffect(()=>{
-        const fmt = new Intl.DateTimeFormat('nl-NL', { timeZone:'Europe/Amsterdam', hour:'2-digit', minute:'2-digit', second:'2-digit', day:'2-digit', month:'2-digit', year:'numeric' });
-        const tick = ()=>setNowNl(fmt.format(new Date()));
-        tick();
-        const t = setInterval(tick, 1000);
-        return ()=>clearInterval(t);
-      },[]);
-
       const NAV = [
         {k:'music', label:'Muziek'},
         {k:'messages', label:'Berichten'},
         {k:'giveaways', label:'Giveaways'},
         {k:'strikes', label:'Strikes'},
-        {k:'counters', label:'Counters'},
-        {k:'warns', label:'Warns'},
+        {k:'counters', label:'Tellers'},
+        {k:'warns', label:'Waarschuwingen'},
         {k:'mutes', label:'Mutes'},
       ];
 
@@ -840,16 +841,7 @@ def create_app(bot=None) -> FastAPI:
       const submit = async()=>{
         setErr('');
         try{
-          // IMPORTANT: Discord IDs are 64-bit Snowflakes.
-          // Never convert them to Number in JS (precision loss -> wrong ID -> 404 Unknown Channel).
-          await api('/api/giveaways/create', {
-            method:'POST',
-            body: JSON.stringify({
-              ...form,
-              winners: Number(form.winners||1),
-              channel_id: String(form.channel_id)
-            })
-          });
+          await api('/api/giveaways/create', {method:'POST', body: JSON.stringify({...form, winners: Number(form.winners||1), channel_id: String(form.channel_id)})});
           await load();
         }catch(e){ setErr(e.message); }
       };
