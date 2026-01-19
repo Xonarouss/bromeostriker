@@ -1433,7 +1433,7 @@ def create_app(bot=None) -> FastAPI:
             bot.db.add_sent_message(gid, int(channel_id), int(msg.id), content, (json.dumps(embed) if embed else None))
         except Exception:
             pass
-        return {"ok": True, \"message_id\": str(msg.id)}
+        return {"ok": True, "message_id": str(msg.id)}
 
     @app.get("/api/messages/sent")
     async def api_messages_sent(req: Request):
@@ -1717,7 +1717,7 @@ def create_app(bot=None) -> FastAPI:
             for m in results:
                 row = cur.execute("SELECT strikes FROM strikes WHERE guild_id=? AND user_id=?", (gid, int(m.id))).fetchone()
                 strikes = int(row[0]) if row else 0
-                items.append({\"user_id\": str(m.id), "user_tag": str(m), "strikes": strikes})
+                items.append({"user_id": str(m.id), "user_tag": str(m), "strikes": strikes})
         return {"items": items}
 
     @app.post("/api/strikes/set")
