@@ -136,9 +136,6 @@ class GuildPlayer:
         # activity for idle-disconnect logic
         self.last_activity: float = time.monotonic()
 
-        # If a user explicitly requested stop (dashboard/command), we should NOT auto-restart radio.
-        self.stop_requested: bool = False
-
 
 class PlayerControls(discord.ui.View):
     def __init__(self, cog: "Music", guild_id: int):
@@ -565,16 +562,12 @@ class Music(commands.Cog):
 
             # Radio streams can sometimes end / drop. If the last track was radio and nothing else is queued,
             # automatically restart the same station instead of triggering idle disconnect.
-            # BUT: if a user explicitly pressed STOP, do NOT auto-restart.
-            if track.is_radio and player.queue.empty() and not player.loop and not player.stop_requested:
+            if track.is_radio and player.queue.empty() and not player.loop:
                 try:
                     await player.queue.put(track)
                     self._touch(guild.id)
                 except Exception:
                     pass
-
-            # reset stop flag after one cycle
-            player.stop_requested = False
 
     # --------------------
     # Slash commands
@@ -662,13 +655,6 @@ class Music(commands.Cog):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
 
         player = self._get_player(interaction.guild.id)
-        player.stop_requested = True
-        # clear queue so nothing restarts
-        try:
-            while True:
-                player.queue.get_nowait()
-        except Exception:
-            pass
         vc = interaction.guild.voice_client if interaction.guild else None
         if vc:
             vc.stop()
@@ -924,62 +910,7 @@ class Music(commands.Cog):
                 vc.stop()
             return
 
-        if action == "join":
-            # Join / move to a voice channel (dashboard)
-            ch_id = payload.get("channel_id")
-            try:
-                ch_id_int = int(ch_id)
-            except Exception:
-                raise Exception("channel_id missing")
-
-            channel = g.get_channel(ch_id_int)
-            if channel is None:
-                try:
-                    channel = await self.bot.fetch_channel(ch_id_int)
-                except Exception as e:
-                    raise Exception(f"voice_channel_not_found:{e}")
-
-            if not isinstance(channel, discord.VoiceChannel):
-                raise Exception("not_a_voice_channel")
-
-            # Permission checks
-            me = g.me
-            if me is None:
-                try:
-                    me = await g.fetch_member(self.bot.user.id)  # type: ignore
-                except Exception:
-                    me = None
-            if me is not None:
-                perms = channel.permissions_for(me)
-                if not perms.connect:
-                    raise Exception("missing_permission:connect")
-
-            # Connect or move
-            if vc and vc.is_connected():
-                try:
-                    await vc.move_to(channel)
-                    return
-                except Exception as e:
-                    raise Exception(f"move_failed:{e}")
-            try:
-                await channel.connect(self_deaf=True)
-                return
-            except Exception as e:
-                raise Exception(f"connect_failed:{e}")
-
-        if action == "disconnect":
-            if not vc or not vc.is_connected():
-                raise Exception("not_connected")
-            try:
-                await vc.disconnect()
-            except Exception as e:
-                raise Exception(f"disconnect_failed:{e}")
-            return
-
         if action == "stop":
-            # prevent radio auto-restart in the play loop
-            player.stop_requested = True
-            player.autoplay = False
             try:
                 while True:
                     player.queue.get_nowait()
