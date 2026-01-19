@@ -136,6 +136,9 @@ class GuildPlayer:
         # activity for idle-disconnect logic
         self.last_activity: float = time.monotonic()
 
+        # If a user explicitly requested stop (dashboard/command), we should NOT auto-restart radio.
+        self.stop_requested: bool = False
+
 
 class PlayerControls(discord.ui.View):
     def __init__(self, cog: "Music", guild_id: int):
@@ -562,12 +565,16 @@ class Music(commands.Cog):
 
             # Radio streams can sometimes end / drop. If the last track was radio and nothing else is queued,
             # automatically restart the same station instead of triggering idle disconnect.
-            if track.is_radio and player.queue.empty() and not player.loop:
+            # BUT: if a user explicitly pressed STOP, do NOT auto-restart.
+            if track.is_radio and player.queue.empty() and not player.loop and not player.stop_requested:
                 try:
                     await player.queue.put(track)
                     self._touch(guild.id)
                 except Exception:
                     pass
+
+            # reset stop flag after one cycle
+            player.stop_requested = False
 
     # --------------------
     # Slash commands
@@ -655,6 +662,13 @@ class Music(commands.Cog):
             return await interaction.response.send_message("Ga in hetzelfde spraakkanaal als de bot.", ephemeral=True)
 
         player = self._get_player(interaction.guild.id)
+        player.stop_requested = True
+        # clear queue so nothing restarts
+        try:
+            while True:
+                player.queue.get_nowait()
+        except Exception:
+            pass
         vc = interaction.guild.voice_client if interaction.guild else None
         if vc:
             vc.stop()
@@ -910,7 +924,43 @@ class Music(commands.Cog):
                 vc.stop()
             return
 
+        if action == "join":
+            # Join a specific voice channel by id (used by dashboard)
+            ch_id = payload.get("channel_id")
+            try:
+                ch_id_int = int(ch_id)
+            except Exception:
+                return
+            channel = g.get_channel(ch_id_int)
+            if channel is None:
+                try:
+                    channel = await self.bot.fetch_channel(ch_id_int)
+                except Exception:
+                    channel = None
+            if isinstance(channel, discord.VoiceChannel):
+                try:
+                    await channel.connect()
+                except Exception:
+                    # already connected somewhere
+                    try:
+                        if vc and vc.is_connected():
+                            await vc.move_to(channel)
+                    except Exception:
+                        pass
+            return
+
+        if action == "disconnect":
+            try:
+                if vc and vc.is_connected():
+                    await vc.disconnect()
+            except Exception:
+                pass
+            return
+
         if action == "stop":
+            # prevent radio auto-restart in the play loop
+            player.stop_requested = True
+            player.autoplay = False
             try:
                 while True:
                     player.queue.get_nowait()
