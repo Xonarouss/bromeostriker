@@ -200,12 +200,6 @@ def create_app(bot=None) -> FastAPI:
     @app.get("/dashboard", include_in_schema=False)
     async def dashboard_redirect():
         return RedirectResponse(url="/")
-
-    # Root redirect -> always land on /dashboard
-    @app.get('/', include_in_schema=False)
-    async def root():
-        return RedirectResponse(url='/dashboard')
-
     # Serve dashboard static assets (favicons, logos, etc.)
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if os.path.isdir(static_dir):
@@ -363,7 +357,7 @@ def create_app(bot=None) -> FastAPI:
 
         user_id = int(me_js.get("id"))
         session = _make_session(user_id)
-        resp = RedirectResponse(url="/dashboard")
+        resp = RedirectResponse(url="/")
         # Secure cookies are only stored by browsers over HTTPS.
         # During initial setup you might access the dashboard over plain HTTP
         # (e.g., when TLS isn't ready yet). In that case, force secure=False
@@ -382,7 +376,7 @@ def create_app(bot=None) -> FastAPI:
 
     @app.get("/logout")
     async def logout():
-        resp = RedirectResponse(url="/dashboard")
+        resp = RedirectResponse(url="/")
         resp.delete_cookie("bs_session")
         return resp
 
