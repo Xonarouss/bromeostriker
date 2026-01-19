@@ -925,36 +925,55 @@ class Music(commands.Cog):
             return
 
         if action == "join":
-            # Join a specific voice channel by id (used by dashboard)
+            # Join / move to a voice channel (dashboard)
             ch_id = payload.get("channel_id")
             try:
                 ch_id_int = int(ch_id)
             except Exception:
-                return
+                raise Exception("channel_id missing")
+
             channel = g.get_channel(ch_id_int)
             if channel is None:
                 try:
                     channel = await self.bot.fetch_channel(ch_id_int)
-                except Exception:
-                    channel = None
-            if isinstance(channel, discord.VoiceChannel):
+                except Exception as e:
+                    raise Exception(f"voice_channel_not_found:{e}")
+
+            if not isinstance(channel, discord.VoiceChannel):
+                raise Exception("not_a_voice_channel")
+
+            # Permission checks
+            me = g.me
+            if me is None:
                 try:
-                    await channel.connect()
+                    me = await g.fetch_member(self.bot.user.id)  # type: ignore
                 except Exception:
-                    # already connected somewhere
-                    try:
-                        if vc and vc.is_connected():
-                            await vc.move_to(channel)
-                    except Exception:
-                        pass
-            return
+                    me = None
+            if me is not None:
+                perms = channel.permissions_for(me)
+                if not perms.connect:
+                    raise Exception("missing_permission:connect")
+
+            # Connect or move
+            if vc and vc.is_connected():
+                try:
+                    await vc.move_to(channel)
+                    return
+                except Exception as e:
+                    raise Exception(f"move_failed:{e}")
+            try:
+                await channel.connect(self_deaf=True)
+                return
+            except Exception as e:
+                raise Exception(f"connect_failed:{e}")
 
         if action == "disconnect":
+            if not vc or not vc.is_connected():
+                raise Exception("not_connected")
             try:
-                if vc and vc.is_connected():
-                    await vc.disconnect()
-            except Exception:
-                pass
+                await vc.disconnect()
+            except Exception as e:
+                raise Exception(f"disconnect_failed:{e}")
             return
 
         if action == "stop":
