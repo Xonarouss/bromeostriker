@@ -32,6 +32,9 @@ STRIKE3_ROLE_ID = 1459637807281602703
 # Muted role
 MUTED_ROLE_ID = 1042562173643268230
 
+# Role that must NEVER be stripped on mute (B-FAM)
+B_FAM_ROLE_ID = 1021765413056565328
+
 # Roles we never want to strip during a mute.
 # NOTE: MUTED_ROLE_ID is *not* protected during /unmute because we explicitly remove it.
 PROTECTED_ROLE_IDS: Set[int] = {
@@ -39,6 +42,7 @@ PROTECTED_ROLE_IDS: Set[int] = {
     STRIKE2_ROLE_ID,
     STRIKE3_ROLE_ID,
     MUTED_ROLE_ID,
+    B_FAM_ROLE_ID,
 }
 
 def _parse_csv_ids(val: str) -> Set[int]:

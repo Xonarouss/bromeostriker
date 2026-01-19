@@ -118,6 +118,42 @@ class DB:
         );
         """)
 
+        # --- giveaway templates (dashboard) ---
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS giveaway_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            prize TEXT NOT NULL,
+            description TEXT,
+            winners_count INTEGER NOT NULL DEFAULT 1,
+            max_participants INTEGER,
+            thumbnail_name TEXT,
+            thumbnail_b64 TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        """
+        )
+
+        # --- sent messages (dashboard) ---
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS sent_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            content TEXT,
+            embed_json TEXT,
+            created_by INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        """
+        )
+
 
         # --- music playlists ---
         cur.execute("""
@@ -390,6 +426,119 @@ class DB:
             "UPDATE giveaways SET ended=1, winner_id=?, winner_ids=? WHERE id=?",
             (winner_id, winner_ids_json, giveaway_id),
         )
+        self.conn.commit()
+
+    def delete_giveaway(self, giveaway_id: int) -> None:
+        """Delete giveaway + entries from DB (does not delete Discord message)."""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM giveaway_entries WHERE giveaway_id=?", (int(giveaway_id),))
+        cur.execute("DELETE FROM giveaways WHERE id=?", (int(giveaway_id),))
+        self.conn.commit()
+
+    # --- giveaway templates ---
+    def list_giveaway_templates(self, guild_id: int) -> list[sqlite3.Row]:
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT id, name, prize, description, winners_count, max_participants, thumbnail_name, thumbnail_b64, created_at, updated_at FROM giveaway_templates WHERE guild_id=? ORDER BY id DESC",
+            (int(guild_id),),
+        ).fetchall()
+
+    def get_giveaway_template(self, guild_id: int, template_id: int) -> sqlite3.Row | None:
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT * FROM giveaway_templates WHERE guild_id=? AND id=?",
+            (int(guild_id), int(template_id)),
+        ).fetchone()
+
+    def create_giveaway_template(
+        self,
+        *,
+        guild_id: int,
+        name: str,
+        prize: str,
+        description: str | None,
+        winners_count: int,
+        max_participants: int | None,
+        thumbnail_name: str | None,
+        thumbnail_b64: str | None,
+    ) -> int:
+        now = int(time.time())
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO giveaway_templates (guild_id, name, prize, description, winners_count, max_participants, thumbnail_name, thumbnail_b64, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(guild_id),
+                str(name),
+                str(prize),
+                description,
+                int(winners_count or 1),
+                max_participants,
+                thumbnail_name,
+                thumbnail_b64,
+                now,
+                now,
+            ),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def delete_giveaway_template(self, guild_id: int, template_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM giveaway_templates WHERE guild_id=? AND id=?", (int(guild_id), int(template_id)))
+        self.conn.commit()
+
+    # --- sent messages ---
+    def add_sent_message(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+        content: str | None,
+        embed_json: str | None,
+        created_by: int | None,
+    ) -> int:
+        now = int(time.time())
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO sent_messages (guild_id, channel_id, message_id, content, embed_json, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(guild_id), int(channel_id), int(message_id), content, embed_json, created_by, now, now),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def list_sent_messages(self, guild_id: int, limit: int = 50) -> list[sqlite3.Row]:
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT id, channel_id, message_id, content, embed_json, created_by, created_at, updated_at FROM sent_messages WHERE guild_id=? ORDER BY id DESC LIMIT ?",
+            (int(guild_id), int(limit)),
+        ).fetchall()
+
+    def get_sent_message(self, guild_id: int, sent_id: int) -> sqlite3.Row | None:
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT * FROM sent_messages WHERE guild_id=? AND id=?",
+            (int(guild_id), int(sent_id)),
+        ).fetchone()
+
+    def update_sent_message(self, guild_id: int, sent_id: int, *, content: str | None, embed_json: str | None) -> None:
+        now = int(time.time())
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE sent_messages SET content=?, embed_json=?, updated_at=? WHERE guild_id=? AND id=?",
+            (content, embed_json, now, int(guild_id), int(sent_id)),
+        )
+        self.conn.commit()
+
+    def delete_sent_message(self, guild_id: int, sent_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM sent_messages WHERE guild_id=? AND id=?", (int(guild_id), int(sent_id)))
         self.conn.commit()
 
     # --- playlists ---

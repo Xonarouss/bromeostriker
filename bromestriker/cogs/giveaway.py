@@ -4,6 +4,8 @@ import random
 import json
 import re
 import time
+import base64
+import io
 from dataclasses import dataclass
 from typing import Optional
 
@@ -92,6 +94,24 @@ def _parse_endtime(s: str) -> int:
         pass
 
     raise ValueError("Onbekend tijd-formaat. Gebruik bijv: 30m, 2h, 1d, 19:00 of 2026-01-12 19:00")
+
+
+def _decode_data_url(data_url: str) -> tuple[bytes, str]:
+    """Decode a base64 data: URL. Returns (bytes, mime)."""
+    raw = (data_url or "").strip()
+    if not raw:
+        raise ValueError("empty data url")
+    if "," not in raw:
+        raise ValueError("invalid data url")
+    header, b64 = raw.split(",", 1)
+    mime = "application/octet-stream"
+    if header.startswith("data:") and ";" in header:
+        mime = header[5:].split(";", 1)[0] or mime
+    try:
+        blob = base64.b64decode(b64)
+    except Exception as e:
+        raise ValueError("invalid base64") from e
+    return blob, mime
 
 
 @dataclass
@@ -613,6 +633,8 @@ class Giveaway(commands.Cog):
         winners: int = 1,
         description: str | None = None,
         max_participants: int | None = None,
+        thumbnail_b64: str | None = None,
+        thumbnail_name: str | None = None,
     ) -> int:
         """Create a giveaway from the web dashboard.
 
@@ -631,6 +653,8 @@ class Giveaway(commands.Cog):
         if not isinstance(channel, discord.TextChannel):
             raise ValueError('channel must be a text channel')
 
+        thumb_name = (thumbnail_name or None)
+
         tmp_state = GiveawayState(
             giveaway_id=0,
             guild_id=guild_id,
@@ -641,13 +665,35 @@ class Giveaway(commands.Cog):
             max_participants=max_participants,
             end_at=int(end_at),
             created_by=int(actor_user_id),
-            thumbnail_name=None,
+            thumbnail_name=thumb_name,
             winners_count=int(winners or 1),
         )
 
         view = ParticipateView(self, tmp_state, ended=False)
+
+        # Optional thumbnail from dashboard (data URL)
+        file = None
+        if thumbnail_b64:
+            try:
+                blob, _mime = _decode_data_url(thumbnail_b64)
+                # default extension based on mime
+                if not thumb_name:
+                    if _mime == "image/jpeg":
+                        thumb_name = "thumb.jpg"
+                    elif _mime == "image/webp":
+                        thumb_name = "thumb.webp"
+                    else:
+                        thumb_name = "thumb.png"
+                tmp_state.thumbnail_name = thumb_name
+                file = discord.File(fp=io.BytesIO(blob), filename=str(thumb_name))
+            except Exception:
+                file = None
+
         # send message first
-        msg = await channel.send(embed=self._giveaway_embed(tmp_state, count=0), view=view)
+        if file:
+            msg = await channel.send(embed=self._giveaway_embed(tmp_state, count=0), view=view, file=file)
+        else:
+            msg = await channel.send(embed=self._giveaway_embed(tmp_state, count=0), view=view)
 
         giveaway_id = self.bot.db.create_giveaway(
             guild_id=guild_id,
@@ -658,7 +704,7 @@ class Giveaway(commands.Cog):
             max_participants=max_participants,
             end_at=int(end_at),
             created_by=int(actor_user_id),
-            thumbnail_name=None,
+            thumbnail_name=tmp_state.thumbnail_name,
             winners_count=int(winners or 1),
         )
 
