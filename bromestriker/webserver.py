@@ -1299,11 +1299,11 @@ def create_app(bot=None) -> FastAPI:
                   <div className='muted'>{it.created_at_human}</div>
                 </div>
                 <div className='muted' style={{marginTop:4}}>
-                  {it.actor ? <>actor: {it.actor}</> : <>actor: —</>}
+                  <span>actor: {it.actor || '—'}</span>
                   {' • '}
-                  {it.target ? <>target: {it.target}</> : <>target: —</>}
-                  {it.channel_id ? <> {' • '}channel: {it.channel_id}</> : null}
-                  {it.message_id ? <> {' • '}message: {it.message_id}</> : null}
+                  <span>target: {it.target || '—'}</span>
+                  {it.channel_id ? (<span>{' • '}channel: {it.channel_id}</span>) : null}
+                  {it.message_id ? (<span>{' • '}message: {it.message_id}</span>) : null}
                 </div>
                 {it.reason ? <div style={{marginTop:4}}>{it.reason}</div> : null}
               </div>
