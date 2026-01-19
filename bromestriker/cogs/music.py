@@ -908,6 +908,39 @@ class Music(commands.Cog):
         player = self._get_player(guild_id)
         self._touch(guild_id)
 
+        async def _ensure_connected_for_actor() -> None:
+            """Best-effort: if the bot is not connected, join the actor's current voice channel.
+
+            This mirrors the in-Discord commands (which naturally know the user's voice channel).
+            Dashboard actions don't have an interaction context, so we infer it from the member.
+            """
+            nonlocal vc
+            if vc and vc.is_connected():
+                return
+            member = g.get_member(int(actor_user_id))
+            if not member or not getattr(member, 'voice', None) or not member.voice or not member.voice.channel:
+                return
+            channel = member.voice.channel
+            # Only voice channels (ignore stages/etc for now)
+            if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+                return
+            # Permission checks
+            me = g.me
+            if me is None:
+                try:
+                    me = await g.fetch_member(self.bot.user.id)  # type: ignore
+                except Exception:
+                    me = None
+            if me is not None:
+                perms = channel.permissions_for(me)
+                if not getattr(perms, 'connect', False):
+                    return
+            try:
+                await channel.connect(self_deaf=True)
+                vc = g.voice_client
+            except Exception:
+                return
+
         if action in {"pause", "resume", "toggle"}:
             if vc and vc.is_playing():
                 vc.pause();
@@ -1004,6 +1037,8 @@ class Music(commands.Cog):
             return
 
         if action == "enqueue_radio":
+            # Auto-join the actor's voice channel if not connected yet.
+            await _ensure_connected_for_actor()
             # Look up station id -> stream url
             if not station_id:
                 station_id = url.lower()
@@ -1022,6 +1057,8 @@ class Music(commands.Cog):
             return
 
         if action == "enqueue" and url:
+            # Auto-join the actor's voice channel if not connected yet.
+            await _ensure_connected_for_actor()
             # Enqueue a URL like /music speel does
             # Use a fake interaction-less flow by extracting info and pushing to queue
             # If the input matches a radio station key, treat it as radio.
@@ -1049,6 +1086,8 @@ class Music(commands.Cog):
             return
 
         if action == "play_playlist":
+            # Auto-join the actor's voice channel if not connected yet.
+            await _ensure_connected_for_actor()
             pl_id = self.bot.db.get_or_create_playlist(guild_id, name="default", created_by=actor_user_id)
             rows = self.bot.db.list_playlist_tracks(pl_id, limit=200)
             # rows are ordered DESC (newest first) -> enqueue reversed so it plays oldest first

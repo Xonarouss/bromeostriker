@@ -166,6 +166,35 @@ class BromeStriker(commands.Bot):
         except Exception as e:
             print("⚠️ Failed to set presence:", e)
 
+    async def on_message_delete(self, message: discord.Message) -> None:
+        """Log deleted messages to the dashboard mod log.
+
+        NOTE: Discord may not always provide full author/content depending on cache.
+        We still store message_id + channel_id for traceability.
+        """
+        try:
+            gid = getattr(self, "guild_id", 0)
+            if not gid:
+                return
+            # Only log for our guild
+            if message.guild and int(message.guild.id) != int(gid):
+                return
+            self.db.add_modlog(
+                guild_id=int(gid),
+                action="message_delete",
+                actor_id=None,
+                target_id=int(message.author.id) if getattr(message, "author", None) else None,
+                channel_id=int(message.channel.id) if getattr(message, "channel", None) else None,
+                message_id=int(message.id),
+                reason=None,
+                extra={
+                    "author_tag": str(message.author) if getattr(message, "author", None) else None,
+                    "content": (message.content[:2000] if getattr(message, "content", None) else None),
+                },
+            )
+        except Exception:
+            return
+
     async def _ensure_roles(self, guild: discord.Guild) -> None:
         def find_role(name: str) -> Optional[discord.Role]:
             return discord.utils.get(guild.roles, name=name)

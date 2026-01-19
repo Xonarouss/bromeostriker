@@ -508,6 +508,7 @@ def create_app(bot=None) -> FastAPI:
         {k:'warns', label:'Waarschuwingen'},
         {k:'mutes', label:'Mutes'},
         {k:'bans', label:'Bans'},
+        {k:'modlog', label:'Mod Log'},
       ];
 
       return (
@@ -549,6 +550,7 @@ def create_app(bot=None) -> FastAPI:
               {tab==='warns' && <Warns setErr={setErr} />}
               {tab==='mutes' && <Mutes setErr={setErr} />}
               {tab==='bans' && <Bans setErr={setErr} />}
+              {tab==='modlog' && <ModLog setErr={setErr} />}
               <div className='footer'>Made with ❤️ by <a href='https://xonarous.nl' target='_blank' rel='noreferrer'>Xonarous</a></div>
             </div>
           </div>
@@ -1267,6 +1269,50 @@ def create_app(bot=None) -> FastAPI:
       );
     }
 
+    function ModLog({setErr}){
+      const [items, setItems] = useState([]);
+      const load = async()=>{ setErr(''); try{ setItems((await api('/api/modlog')).items||[]); }catch(e){ setErr(e.message); } };
+      useEffect(()=>{ load(); },[]);
+
+      const clear = async()=>{
+        if(!confirm('Mod log legen?')) return;
+        setErr('');
+        try{ await api('/api/modlog/clear', {method:'POST'}); await load(); }
+        catch(e){ setErr(e.message); }
+      };
+
+      return (
+        <div className='card'>
+          <div className='row' style={{justifyContent:'space-between', alignItems:'center'}}>
+            <div style={{fontSize:18,fontWeight:800}}>Mod Log</div>
+            <div className='row'>
+              <button className='btn' onClick={load}>↻ Refresh</button>
+              <button className='btn danger' onClick={clear}>🧹 Clear</button>
+            </div>
+          </div>
+          {items.length===0 && <div className='muted' style={{marginTop:10}}>Geen entries.</div>}
+          <div style={{marginTop:10}}>
+            {items.map(it=> (
+              <div key={it.id} style={{padding:'10px 0', borderBottom:'1px solid #1f2937'}}>
+                <div className='row' style={{justifyContent:'space-between'}}>
+                  <div style={{fontWeight:800}}>{it.action}</div>
+                  <div className='muted'>{it.created_at_human}</div>
+                </div>
+                <div className='muted' style={{marginTop:4}}>
+                  {it.actor ? <>actor: {it.actor}</> : <>actor: —</>}
+                  {' • '}
+                  {it.target ? <>target: {it.target}</> : <>target: —</>}
+                  {it.channel_id ? <> {' • '}channel: {it.channel_id}</> : null}
+                  {it.message_id ? <> {' • '}message: {it.message_id}</> : null}
+                </div>
+                {it.reason ? <div style={{marginTop:4}}>{it.reason}</div> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
   </script>
 </body>
@@ -1356,6 +1402,65 @@ def create_app(bot=None) -> FastAPI:
         except Exception:
             out = []
         return {"items": out}
+
+    # --- moderation log ---
+    @app.get("/api/modlog")
+    async def api_modlog(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        rows = bot.db.list_modlog(gid, limit=200)
+        guild = bot.get_guild(gid)
+        items = []
+        for r in rows:
+            actor = None
+            target = None
+            try:
+                if guild and r["actor_id"]:
+                    m = guild.get_member(int(r["actor_id"]))
+                    actor = str(m) if m else str(r["actor_id"])
+                elif r["actor_id"]:
+                    actor = str(r["actor_id"])
+            except Exception:
+                actor = str(r["actor_id"]) if r["actor_id"] else None
+            try:
+                if guild and r["target_id"]:
+                    m = guild.get_member(int(r["target_id"]))
+                    target = str(m) if m else str(r["target_id"])
+                elif r["target_id"]:
+                    target = str(r["target_id"])
+            except Exception:
+                target = str(r["target_id"]) if r["target_id"] else None
+            ts = int(r["created_at"])
+            items.append(
+                {
+                    "id": int(r["id"]),
+                    "action": r["action"],
+                    "actor_id": str(r["actor_id"]) if r["actor_id"] is not None else None,
+                    "target_id": str(r["target_id"]) if r["target_id"] is not None else None,
+                    "actor": actor,
+                    "target": target,
+                    "channel_id": str(r["channel_id"]) if r["channel_id"] is not None else None,
+                    "message_id": str(r["message_id"]) if r["message_id"] is not None else None,
+                    "reason": r["reason"],
+                    "extra_json": r["extra_json"],
+                    "created_at": ts,
+                    "created_at_human": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts)),
+                }
+            )
+        return {"items": items}
+
+    @app.post("/api/modlog/clear")
+    async def api_modlog_clear(req: Request):
+        try:
+            await _require_allowed(req)
+        except PermissionError as e:
+            return _error(401, str(e))
+        gid = getattr(bot, "guild_id", 0)
+        bot.db.clear_modlog(gid)
+        return {"ok": True}
 
     # --- Message sender (Mee6-style) ---
     @app.post("/api/messages/send")
@@ -1723,7 +1828,7 @@ def create_app(bot=None) -> FastAPI:
     @app.post("/api/strikes/set")
     async def api_strikes_set(req: Request):
         try:
-            await _require_allowed(req)
+            actor_id = await _require_allowed(req)
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
@@ -1731,18 +1836,26 @@ def create_app(bot=None) -> FastAPI:
         strikes = max(0, int(body.get("strikes") or 0))
         gid = getattr(bot, "guild_id", 0)
         bot.db.set_strikes(gid, uid, strikes)
+        try:
+            bot.db.add_modlog(guild_id=gid, action="strikes_set", actor_id=int(actor_id), target_id=int(uid), reason=f"set to {strikes}")
+        except Exception:
+            pass
         return {"ok": True}
 
     @app.post("/api/warns/clear")
     async def api_warns_clear(req: Request):
         try:
-            await _require_allowed(req)
+            actor_id = await _require_allowed(req)
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
         uid = int(body.get("user_id"))
         gid = getattr(bot, "guild_id", 0)
         bot.db.delete_warns(gid, uid)
+        try:
+            bot.db.add_modlog(guild_id=gid, action="warns_clear", actor_id=int(actor_id), target_id=int(uid))
+        except Exception:
+            pass
         return {"ok": True}
 
     @app.get("/api/mutes")
@@ -1769,7 +1882,7 @@ def create_app(bot=None) -> FastAPI:
     @app.post("/api/mutes/unmute")
     async def api_unmute(req: Request):
         try:
-            await _require_allowed(req)
+            actor_id = await _require_allowed(req)
         except PermissionError as e:
             return _error(401, str(e))
         body = await req.json()
@@ -1794,6 +1907,11 @@ def create_app(bot=None) -> FastAPI:
             pass
         try:
             bot.db.clear_mute(gid, uid)
+        except Exception:
+            pass
+        # Mod log
+        try:
+            bot.db.add_modlog(guild_id=gid, action="unmute", actor_id=int(actor_id), target_id=int(uid))
         except Exception:
             pass
         return {"ok": True}
