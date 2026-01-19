@@ -427,6 +427,8 @@ def create_app(bot=None) -> FastAPI:
     .stationL{display:flex;gap:10px;align-items:center;min-width:0}
     .stationLogo{width:34px;height:34px;border-radius:10px;object-fit:contain;background:rgba(148,163,184,.08);padding:6px}
     .stationName{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .modalOverlay{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px}
+    .modalCard{width:min(720px,100%);background:linear-gradient(180deg, rgba(15,23,42,.98), rgba(15,23,42,.9));border:1px solid rgba(148,163,184,.18);border-radius:20px;padding:16px;box-shadow:0 28px 80px rgba(0,0,0,.55)}
     .footer{margin-top:16px;padding:14px 0;color:var(--muted);font-size:13px;text-align:center}
     @media (max-width: 980px){.sidebar{display:none}.col6{grid-column:span 12}.wrap{padding:14px}}
   </style>
@@ -1019,6 +1021,13 @@ def create_app(bot=None) -> FastAPI:
       const [channels, setChannels] = useState([]);
       const [templates, setTemplates] = useState([]);
 
+      // Template-use dialog (so templates don't auto-post immediately)
+      const [useDlgOpen, setUseDlgOpen] = useState(false);
+      const [useDlgTpl, setUseDlgTpl] = useState(null);
+      const [useDlgEndMin, setUseDlgEndMin] = useState(30);
+      const [useDlgWinners, setUseDlgWinners] = useState(1);
+      const [useDlgMax, setUseDlgMax] = useState('');
+
       // 'end' is reused for template apply + manual create.
       const [form, setForm] = useState({channel_id:'', prize:'', end:'30m', winners:1, max_participants:'', description:'', thumbnail_b64:null, thumbnail_name:null});
       const [tpl, setTpl] = useState({name:'', prize:'', description:'', winners:1, max_participants:'', thumbnail_b64:null, thumbnail_name:null});
@@ -1094,16 +1103,37 @@ def create_app(bot=None) -> FastAPI:
         try{ await api(`/api/giveaways/templates/${id}/delete`, {method:'POST'}); await load(); }catch(e){ setErr(e.message); }
       };
 
-      const useTemplate = async(id)=>{
+      const openUseTemplate = (t)=>{
+        setErr('');
+        setUseDlgTpl(t);
+        // defaults: duration from right-side form, winners/max from template
+        let mins = 30;
+        try{
+          const m = String(form.end||'30m').trim().match(/^(\d+)\s*m$/i);
+          if(m) mins = parseInt(m[1],10);
+        }catch(e){ mins = 30; }
+        setUseDlgEndMin(mins);
+        setUseDlgWinners(Number((t && t.winners) ? t.winners : 1));
+        setUseDlgMax((t && t.max_participants) ? String(t.max_participants) : '');
+        setUseDlgOpen(true);
+      };
+
+      const confirmUseTemplate = async()=>{
+        if(!useDlgTpl) return;
         setErr('');
         try{
-          await api(`/api/giveaways/templates/${id}/use`, {method:'POST', body: JSON.stringify({
+          const mins = Math.max(1, parseInt(String(useDlgEndMin||0),10) || 1);
+          const winners = Math.max(1, parseInt(String(useDlgWinners||1),10) || 1);
+          const maxp = (String(useDlgMax||'').trim()==='' ? null : parseInt(String(useDlgMax),10));
+          await api(`/api/giveaways/templates/${useDlgTpl.id}/use`, {method:'POST', body: JSON.stringify({
             // Discord Snowflakes must stay strings (JS Number loses precision)
             channel_id: String(form.channel_id),
-            end_in: form.end,
-            winners: Number(form.winners||1),
-            max_participants: (form.max_participants===''? null : form.max_participants)
+            end_in: String(mins)+'m',
+            winners: winners,
+            max_participants: maxp
           })});
+          setUseDlgOpen(false);
+          setUseDlgTpl(null);
           await load();
         }catch(e){ setErr(e.message); }
       };
@@ -1120,7 +1150,7 @@ def create_app(bot=None) -> FastAPI:
                 {t.thumbnail_name ? <div className='muted' style={{marginTop:4}}>icon: {t.thumbnail_name}</div> : null}
               </div>
               <div className='row'>
-                <button className='btn primary' onClick={()=>useTemplate(t.id)}>Gebruik</button>
+                <button className='btn primary' onClick={()=>openUseTemplate(t)}>Gebruik</button>
                 {isBuiltin ? null : <button className='btn danger' onClick={()=>deleteTemplate(t.id)}>🗑️</button>}
               </div>
             </div>
@@ -1130,6 +1160,43 @@ def create_app(bot=None) -> FastAPI:
 
       return (
         <div className='grid'>
+          {useDlgOpen && (
+            <div className='modalOverlay' onClick={()=>{ setUseDlgOpen(false); setUseDlgTpl(null); }}>
+              <div className='modalCard' onClick={e=>e.stopPropagation()}>
+                <div className='row' style={{justifyContent:'space-between', alignItems:'center'}}>
+                  <div style={{fontWeight:900,fontSize:18}}>Template gebruiken</div>
+                  <button className='btn' onClick={()=>{ setUseDlgOpen(false); setUseDlgTpl(null); }}>✖</button>
+                </div>
+                <div className='muted' style={{marginTop:6}}>
+                  {useDlgTpl ? (useDlgTpl.name + ' • ' + useDlgTpl.prize) : ''}
+                </div>
+
+                <div className='row' style={{marginTop:14}}>
+                  <div style={{flex:1}}>
+                    <div className='muted' style={{marginBottom:6}}>Duur (minuten)</div>
+                    <input type='number' min='1' value={useDlgEndMin} onChange={e=>setUseDlgEndMin(e.target.value)} />
+                    <div className='row' style={{marginTop:8, flexWrap:'wrap'}}>
+                      <button className='btn' onClick={()=>setUseDlgEndMin(15)}>15m</button>
+                      <button className='btn' onClick={()=>setUseDlgEndMin(30)}>30m</button>
+                      <button className='btn' onClick={()=>setUseDlgEndMin(60)}>60m</button>
+                      <button className='btn' onClick={()=>setUseDlgEndMin(120)}>120m</button>
+                    </div>
+                  </div>
+                  <div style={{flex:1}}>
+                    <div className='muted' style={{marginBottom:6}}>Max winnaars</div>
+                    <input type='number' min='1' value={useDlgWinners} onChange={e=>setUseDlgWinners(e.target.value)} />
+                    <div className='muted' style={{marginTop:12, marginBottom:6}}>Max deelnemers (optioneel)</div>
+                    <input type='number' min='1' value={useDlgMax} onChange={e=>setUseDlgMax(e.target.value)} placeholder='—' />
+                  </div>
+                </div>
+
+                <div className='row' style={{justifyContent:'flex-end', marginTop:16}}>
+                  <button className='btn' onClick={()=>{ setUseDlgOpen(false); setUseDlgTpl(null); }}>Annuleren</button>
+                  <button className='btn primary' onClick={confirmUseTemplate}>Start giveaway</button>
+                </div>
+              </div>
+            </div>
+          )}
           <div className='card col6'>
             <div style={{fontSize:18,fontWeight:800, marginBottom:10}}>Templates</div>
             <div className='muted' style={{marginBottom:10}}>Gebruik de velden rechts (kanaal/duur/winners/max) om de template-use te overriden.</div>
@@ -1535,8 +1602,16 @@ def create_app(bot=None) -> FastAPI:
         # Save history
         gid = getattr(bot, "guild_id", 0)
         try:
-            bot.db.add_sent_message(gid, int(channel_id), int(msg.id), content, (json.dumps(embed) if embed else None))
+            bot.db.add_sent_message(
+                guild_id=int(gid),
+                channel_id=int(channel_id),
+                message_id=int(msg.id),
+                content=content,
+                embed_json=(json.dumps(embed) if embed else None),
+                created_by=int(uid),
+            )
         except Exception:
+            # History is non-critical; never fail the send because of DB issues.
             pass
         return {"ok": True, "message_id": str(msg.id)}
 
@@ -2261,12 +2336,20 @@ def create_app(bot=None) -> FastAPI:
                 thumb_b64 = f"data:{mime};base64,{_b64.b64encode(blob).decode('utf-8')}"
             except Exception:
                 thumb_b64 = None
+        # Allow the dashboard to override duration / max winners / max participants at use-time.
+        winners_override = body.get("winners")
+        max_participants_override = body.get("max_participants")
+        try:
+            winners_override = int(winners_override) if winners_override is not None else None
+        except Exception:
+            winners_override = None
+
         payload = {
             "channel_id": channel_id,
             "prize": tpl.get("prize"),
             "description": tpl.get("description"),
-            "winners": int(tpl.get("winners") or 1),
-            "max_participants": tpl.get("max_participants"),
+            "winners": winners_override if winners_override is not None else int(tpl.get("winners") or 1),
+            "max_participants": max_participants_override if max_participants_override is not None else tpl.get("max_participants"),
             "thumbnail_b64": thumb_b64,
             "thumbnail_name": thumb_name,
         }

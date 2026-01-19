@@ -1052,8 +1052,9 @@ class Music(commands.Cog):
                 pass
             track = Track(title=f"📻 {nice}", url=stream, webpage_url=stream, requester_id=actor_user_id, is_radio=True, radio_name=nice)
             await player.queue.put(track)
+            # NOTE: _player_loop expects a discord.Guild, not an int guild_id.
             if player._task is None or player._task.done():
-                player._task = asyncio.create_task(self._player_loop(guild_id))
+                player._task = asyncio.create_task(self._player_loop(g))
             return
 
         if action == "enqueue" and url:
@@ -1070,8 +1071,9 @@ class Music(commands.Cog):
             else:
                 track = await self._extract_track(url, requester_id=actor_user_id)
             await player.queue.put(track)
+            # NOTE: _player_loop expects a discord.Guild, not an int guild_id.
             if player._task is None or player._task.done():
-                player._task = asyncio.create_task(self._player_loop(guild_id))
+                player._task = asyncio.create_task(self._player_loop(g))
             return
 
         if action == "playlist_add":
@@ -1098,7 +1100,8 @@ class Music(commands.Cog):
                 except Exception:
                     continue
             if rows and (player._task is None or player._task.done()):
-                player._task = asyncio.create_task(self._player_loop(guild_id))
+                # NOTE: _player_loop expects a discord.Guild, not an int guild_id.
+                player._task = asyncio.create_task(self._player_loop(g))
             return
 
         if action == "clear_playlist":
