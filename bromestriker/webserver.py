@@ -1321,7 +1321,7 @@ def create_app(bot=None) -> FastAPI:
                         perms = ch.permissions_for(me)
                         if not (getattr(perms, 'view_channel', False) and getattr(perms, 'send_messages', False)):
                             continue
-                    items.append({"id": ch.id, "name": ch.name})
+                    items.append({"id": str(ch.id), "name": ch.name})
                 except Exception:
                     continue
         return {"items": items}
@@ -1336,7 +1336,7 @@ def create_app(bot=None) -> FastAPI:
         items = []
         if guild:
             for ch in guild.voice_channels:
-                items.append({"id": ch.id, "name": ch.name})
+                items.append({"id": str(ch.id), "name": ch.name})
         return {"items": items}
 
     @app.get("/api/bans")
@@ -1352,7 +1352,7 @@ def create_app(bot=None) -> FastAPI:
         try:
             async for entry in guild.bans(limit=200):
                 u = entry.user
-                out.append({"user_id": u.id, "name": str(u), "reason": entry.reason})
+                out.append({"user_id": str(u.id), "name": str(u), "reason": entry.reason})
         except Exception:
             out = []
         return {"items": out}
@@ -1433,7 +1433,7 @@ def create_app(bot=None) -> FastAPI:
             bot.db.add_sent_message(gid, int(channel_id), int(msg.id), content, (json.dumps(embed) if embed else None))
         except Exception:
             pass
-        return {"ok": True, "message_id": int(msg.id)}
+        return {"ok": True, \"message_id\": str(msg.id)}
 
     @app.get("/api/messages/sent")
     async def api_messages_sent(req: Request):
@@ -1448,8 +1448,8 @@ def create_app(bot=None) -> FastAPI:
             items.append(
                 {
                     "id": int(r["id"]),
-                    "channel_id": int(r["channel_id"]),
-                    "message_id": int(r["message_id"]),
+                    "channel_id": str(r["channel_id"]),
+                    "message_id": str(r["message_id"]),
                     "content": r["content"],
                     "embed_json": r["embed_json"],
                     "created_at": int(r["created_at"]),
@@ -1717,7 +1717,7 @@ def create_app(bot=None) -> FastAPI:
             for m in results:
                 row = cur.execute("SELECT strikes FROM strikes WHERE guild_id=? AND user_id=?", (gid, int(m.id))).fetchone()
                 strikes = int(row[0]) if row else 0
-                items.append({"user_id": int(m.id), "user_tag": str(m), "strikes": strikes})
+                items.append({\"user_id\": str(m.id), "user_tag": str(m), "strikes": strikes})
         return {"items": items}
 
     @app.post("/api/strikes/set")
