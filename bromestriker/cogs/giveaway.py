@@ -125,8 +125,11 @@ class GiveawayState:
     end_at: int
     max_participants: Optional[int]
     thumbnail_name: Optional[str]
+    # Creator (used by dashboard actions and for audit/logging). Optional for backwards compatibility
+    created_by: Optional[int] = None
     winners_count: int = 1
     winner_ids_json: Optional[str] = None
+
 class ParticipateView(discord.ui.View):
     def __init__(self, cog: "Giveaway", state: GiveawayState, *, ended: bool = False):
         super().__init__(timeout=None)
